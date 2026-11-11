@@ -5,7 +5,7 @@ import logging
 
 import paho.mqtt.client as mqtt
 
-from classify import FIELD_MAP, SKIP_ENTITY, entity_name
+from classify import FIELD_MAP, SKIP_ENTITY, entity_name, is_event_device
 from radiosonde import TRACKER_FIELDS
 
 log = logging.getLogger("mqtt")
@@ -108,6 +108,8 @@ class MQTTOut:
             "manufacturer": f"via {dev['source']}",
         }
         st = self._state_topic(dev)
+        stale = int(self.o.get("stale_after_min") or 0) * 60
+        expire = stale if stale and not is_event_device(dev.get("category")) else 0
         for field, (comp, dclass, unit, sclass, ecat) in self._components(dev):
             obj = f"{dev['uid']}_{field}"
             cfg = {
@@ -134,6 +136,8 @@ class MQTTOut:
                 cfg["state_class"] = sclass
             if ecat:
                 cfg["entity_category"] = ecat
+            if expire and field != "last_seen":
+                cfg["expire_after"] = expire   # goes unavailable when the sensor stops reporting
             self.pub(f"{self.disc}/{comp}/rtlsdr_{dev['uid']}/{field}/config", cfg, retain=True)
         # remove entities for fields we no longer expose (e.g. rtl_433's "test" flag in 0.2.x)
         for field in json.loads(dev.get("last_state") or "{}"):

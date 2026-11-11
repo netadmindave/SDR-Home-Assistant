@@ -1,6 +1,7 @@
 """Time-slices one RTL-SDR between rtl_433 (decoding) and rtl_power (energy sweeps)."""
 import asyncio
 import collections
+import random
 import json
 import logging
 import os
@@ -12,7 +13,7 @@ import time
 import datetime as dt
 
 import radiosonde as rs
-from classify import classify_rtl433, rtl433_identity, rtl433_state, uid_for
+from classify import classify_rtl433, is_event_device, rtl433_identity, rtl433_state, uid_for
 from config import data_dir
 
 log = logging.getLogger("scanner")
@@ -38,7 +39,7 @@ class Scanner:
         self._skip = asyncio.Event()
         self._procs = []
         self._pos = {"survey": 0, "monitor": 0}
-        self._last_mini_survey = time.time()
+        self._next_day_survey = self._schedule_day_survey(time.time())
         # The UI toggle persists across restarts, unless the add-on option itself was changed.
         if db.get_setting("mode_option") != opts["mode"]:
             db.set_setting("mode_option", opts["mode"])
@@ -46,6 +47,13 @@ class Scanner:
         self.mode = db.get_setting("mode", opts["mode"])
         self.rs_windows = rs.parse_windows(opts.get("radiosonde_windows_utc", ""))
         self.rs_force_until = 0.0
+        self.survey_windows = rs.parse_windows(opts.get("survey_schedule", ""))
+        self._pending = None
+        fs = db.get_setting("first_start")
+        if not fs:
+            fs = str(time.time())
+            db.set_setting("first_start", fs)
+        self.first_start = float(fs)
 
     # ------------------------------------------------------------- helpers
     def note(self, msg, level=logging.INFO):
@@ -53,7 +61,7 @@ class Scanner:
         self.ring.append({"t": time.time(), "msg": msg, "lvl": logging.getLevelName(level)})
 
     def set_mode(self, mode):
-        if mode not in ("survey", "monitor"):
+        if mode not in ("survey", "monitor", "auto"):
             raise ValueError(mode)
         self.mode = mode
         self.db.set_setting("mode", mode)
@@ -109,20 +117,132 @@ class Scanner:
             out.append(s)
         return out or swp
 
-    def monitor_order(self):
-        wanted = {d["slot"] for d in self.db.approved()}
-        slots = [s for s in self.plan["slots"] if s["kind"] == "decode" and s["name"] in wanted]
-        if len(slots) == 1:
-            slots = [dict(slots[0], dwell=3600)]
-        return slots
+    # ------------------------------------------------------------- scheduling
+    def _local_window_end(self):
+        """End (epoch) of the survey_schedule window we're in, local time, or None."""
+        end = rs.window_end(self.survey_windows, dt.datetime.now())
+        return end.timestamp() if end else None
+
+    def _initial_survey_until(self):
+        if not self.o.get("initial_survey"):
+            return 0
+        days = float(self.o.get("initial_survey_days") or 0)
+        return self.first_start + days * 86400 if days > 0 else 0
+
+    @staticmethod
+    def _schedule_day_survey(after):
+        """A random moment within the hour after `after`, so daytime survey slots land at
+        unpredictable times rather than always on the hour."""
+        return after + random.uniform(0, 3600)
+
+    def effective_mode(self):
+        """survey: always survey. monitor: monitoring only, never surveys.
+        auto: survey inside survey_schedule (and during the optional initial survey),
+        monitor otherwise with short random daytime survey slots. Auto keeps surveying until
+        at least one device is approved, since there's nothing to monitor yet."""
+        if self.mode in ("survey", "monitor"):
+            return self.mode
+        if not self.db.approved():
+            return "survey"
+        if time.time() < self._initial_survey_until() or self._local_window_end():
+            return "survey"
+        return "monitor"
+
+    def monitor_plan(self):
+        """Group approved devices by slot and pick the 'home' slot: the one with the most
+        event-driven devices (door sensors, remotes...), then the most devices."""
+        decode = {s["name"]: s for s in self.plan["slots"] if s["kind"] == "decode"}
+        by_slot = {}
+        for d in self.db.approved():
+            if d["slot"] in decode:
+                by_slot.setdefault(d["slot"], []).append(d)
+        if not by_slot:
+            return None
+        home = max(by_slot, key=lambda k: (sum(is_event_device(d["category"]) for d in by_slot[k]),
+                                           len(by_slot[k])))
+        return decode, by_slot, home
+
+    def next_monitor_slot(self):
+        """Freshness-driven monitor scheduling.
+
+        The dongle parks on the home slot. Another slot is visited only when one of its
+        approved periodic devices hasn't been heard for monitor_refresh_min; the visit ends as
+        soon as all of that slot's periodic devices have reported (or monitor_dwell_s passes).
+        Returns (slot, uids_to_wait_for) or None.
+        """
+        plan = self.monitor_plan()
+        if not plan:
+            return None
+        decode, by_slot, home = plan
+        now = time.time()
+        refresh = float(self.o.get("monitor_refresh_min") or 10) * 60
+        due, next_due = [], float("inf")
+        for name, devs in by_slot.items():
+            if name == home:
+                continue
+            periodic = [d for d in devs if not is_event_device(d["category"])] or devs
+            oldest = min(d["last_seen"] or 0 for d in periodic)
+            if oldest + refresh <= now:
+                due.append((oldest, name, periodic))
+            else:
+                next_due = min(next_due, oldest + refresh)
+        if due:
+            _, name, periodic = min(due)
+            dwell = int(self.o.get("monitor_dwell_s") or 90)
+            return dict(decode[name], dwell=dwell), {d["uid"] for d in periodic}
+        dwell = 3600 if next_due == float("inf") else next_due - now
+        return dict(decode[home], dwell=int(max(30, min(3600, dwell)))), None
+
+    def _cap_dwell(self, slot):
+        """Don't run past the next radiosonde window or the next auto-mode switch."""
+        now = time.time()
+        limits = []
+        if self.o.get("radiosonde_enabled"):
+            nxt = rs.next_window_start(self.rs_windows)
+            if nxt:
+                limits.append(nxt.timestamp() - now)
+        if (self.mode == "auto" and self.effective_mode() == "monitor"
+                and int(self.o.get("daytime_survey_min_per_hour") or 0) > 0):
+            limits.append(self._next_day_survey - now)
+        if self.mode == "auto" and self.survey_windows:
+            end = self._local_window_end()
+            if end:
+                limits.append(end - now)
+            else:
+                nxt = rs.next_window_start(self.survey_windows, dt.datetime.now())
+                if nxt:
+                    limits.append(nxt.timestamp() - now)
+        if limits:
+            cap = int(max(20, min(limits) + 1))
+            if cap < slot["dwell"]:
+                slot = dict(slot, dwell=cap)
+        return slot
 
     def status(self):
         now = time.time()
         nxt = rs.next_window_start(self.rs_windows) if self.o.get("radiosonde_enabled") else None
-        order = self.survey_order() if self.mode == "survey" else self.monitor_order()
+        eff = self.effective_mode()
+        order = self.survey_order()
         cycle = sum(s["dwell"] for s in order)
+        mon = None
+        plan = self.monitor_plan()
+        if plan:
+            decode, by_slot, home = plan
+            mon = {"home": home, "slots": [
+                {"name": k, "devices": len(v),
+                 "event_devices": sum(is_event_device(d["category"]) for d in v),
+                 "oldest_age_s": round(now - min(d["last_seen"] or 0 for d in v))}
+                for k, v in sorted(by_slot.items())]}
+        init_until = self._initial_survey_until()
         return {
             "mode": self.mode,
+            "effective_mode": eff,
+            "survey_schedule": self.o.get("survey_schedule") or None,
+            "initial_survey_until": init_until if init_until > now else None,
+            "next_day_survey": (self._next_day_survey if self.mode == "auto"
+                                and int(self.o.get("daytime_survey_min_per_hour") or 0) > 0
+                                else None),
+            "monitor": mon,
             "current": self.current and {
                 "name": self.current["name"], "kind": self.current["kind"],
                 "decoder": self.current["decoder"],
@@ -130,6 +250,7 @@ class Scanner:
                 "elapsed": round(now - self.started) if self.started else 0,
                 "dwell": self.current["dwell"],
                 "events": self.cur_events,
+                "waiting_for": len(self._pending) if self._pending else 0,
             },
             "cycle_seconds": cycle,
             "order": [s["name"] for s in order],
@@ -150,46 +271,67 @@ class Scanner:
     # ------------------------------------------------------------- main loop
     async def run(self):
         self.note(f"Scanner starting in {self.mode} mode, device {self.o['device']}")
+        last_eff = None
         while True:
             until = self.radiosonde_due()
             if until:
                 await self.run_slot(self.radiosonde_slot(until))
                 await asyncio.sleep(1.0)
                 continue
-            if self.mode == "monitor":
-                order = self.monitor_order()
-                if not order:
-                    self.note("Monitor mode but no approved devices; surveying instead",
-                              logging.WARNING)
-                    order, key = self.survey_order(), "survey"
-                else:
-                    key = "monitor"
-            else:
-                order, key = self.survey_order(), "survey"
+            eff = self.effective_mode()
+            if eff != last_eff:
+                self.note(f"Now {eff}" + (" (auto)" if self.mode == "auto" else ""))
+                last_eff = eff
+            if eff == "monitor":
+                nxt = self.next_monitor_slot()
+                if nxt:
+                    slot, pending = nxt
+                    await self.run_slot(self._cap_dwell(slot), pending)
+                    await self._maybe_day_survey()
+                    await asyncio.sleep(1.0)
+                    continue
+                if self.mode == "monitor":
+                    self.current = None
+                    self.note("Monitor-only mode, but no devices are approved: idle. "
+                              "Approve devices or switch to auto/survey.", logging.WARNING)
+                    try:
+                        await asyncio.wait_for(self._skip.wait(), 60)
+                    except asyncio.TimeoutError:
+                        pass
+                    self._skip.clear()
+                    continue
+            order = self.survey_order()
             if not order:
                 self.note("Survey plan is empty", logging.ERROR)
                 await asyncio.sleep(30)
                 continue
-            i = self._pos[key] % len(order)
-            self._pos[key] = i + 1
-            await self.run_slot(order[i])
-
-            # optional mini-survey while monitoring
-            mins = int(self.o.get("monitor_hourly_survey_min") or 0)
-            if (self.mode == "monitor" and key == "monitor" and mins > 0
-                    and time.time() - self._last_mini_survey > 3600):
-                self._last_mini_survey = time.time()
-                so = self.survey_order()
-                j = self._pos["survey"] % len(so)
-                self._pos["survey"] = j + 1
-                await self.run_slot(dict(so[j], dwell=min(so[j]["dwell"], mins * 60)))
+            i = self._pos["survey"] % len(order)
+            self._pos["survey"] = i + 1
+            await self.run_slot(self._cap_dwell(order[i]))
             await asyncio.sleep(1.0)  # give USB a moment to release
 
-    async def run_slot(self, slot):
+    async def _maybe_day_survey(self):
+        """Auto mode only: once per hour, at a random time, survey one random slot briefly."""
+        mins = int(self.o.get("daytime_survey_min_per_hour") or 0)
+        if self.mode != "auto" or mins <= 0 or time.time() < self._next_day_survey:
+            return
+        hour_start = self._next_day_survey
+        so = self.survey_order()
+        if so:
+            pick = random.choice(so)
+            self.note(f"Daytime survey: {pick['name']} for up to {mins} min")
+            await self.run_slot(self._cap_dwell(dict(pick, dwell=min(pick["dwell"], mins * 60))))
+        # next one at a random time in the following hour (never two back-to-back)
+        self._next_day_survey = self._schedule_day_survey(
+            max(time.time(), hour_start - (hour_start % 3600) + 3600))
+
+    async def run_slot(self, slot, pending=None):
         self.current, self.started, self.cur_events = slot, time.time(), 0
+        self._pending = set(pending) if pending else None
         self.ends = self.started + slot["dwell"]
         self._skip.clear()
-        self.mqtt.status({"mode": self.mode, "slot": slot["name"], "decoder": slot["decoder"],
+        self.mqtt.status({"mode": self.mode, "effective_mode": self.effective_mode(),
+                          "slot": slot["name"], "decoder": slot["decoder"],
                           "since": int(self.started)})
         err = None
         stats = {"frames": 0, "frames_decoded": 0}
@@ -216,6 +358,7 @@ class Scanner:
         else:
             self.note(f"{slot['name']}: done, {dwell:.0f}s, {self.cur_events} events")
         self.current = None
+        self._pending = None
 
     # ------------------------------------------------------------- process plumbing
     async def _spawn(self, cmd, cwd=None, kill_wait=6):
@@ -428,6 +571,11 @@ class Scanner:
             category=category, slot=slot["name"], freq_mhz=freq, rssi=rssi, snr=snr,
             state=state, raw=raw)
         self.cur_events += 1
+        if self._pending and uid in self._pending:
+            self._pending.discard(uid)
+            if not self._pending:
+                self.note(f"{slot['name']}: all monitored devices reported, moving on")
+                self._skip.set()
         dev = self.db.device(uid)
         if new:
             self.note(f"New device: {category} — {model} id={dev_id} on {slot['name']}")

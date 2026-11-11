@@ -1,5 +1,5 @@
 name: RTL-SDR Survey
-version: "0.2.2"
+version: "0.3.1"
 slug: rtlsdr_survey
 description: >-
   One RTL-SDR, time-sliced between rtl_433 decoding, rtl_power sweeps and
@@ -26,7 +26,14 @@ ports_description:
 map:
   - addon_config:rw
 options:
-  mode: survey
+  mode: auto
+  survey_schedule: "01:00-05:00"
+  initial_survey: false
+  initial_survey_days: 7
+  daytime_survey_min_per_hour: 5
+  monitor_dwell_s: 90
+  monitor_refresh_min: 10
+  stale_after_min: 120
   device: "0"
   gain: auto
   ppm: 0
@@ -34,7 +41,6 @@ options:
   sweep_dwell_s: 45
   sweep_integration_s: 5
   peak_threshold_db: 10
-  monitor_hourly_survey_min: 0
   publish_raw: true
   base_topic: rtlsdr
   discovery_prefix: homeassistant
@@ -46,7 +52,14 @@ options:
   radiosonde_publish_ha: true
   sondehub_callsign: ""
 schema:
-  mode: list(survey|monitor)
+  mode: list(auto|survey|monitor)
+  survey_schedule: str?
+  initial_survey: bool
+  initial_survey_days: int(1,60)
+  daytime_survey_min_per_hour: int(0,30)
+  monitor_dwell_s: int(20,1800)
+  monitor_refresh_min: int(1,240)
+  stale_after_min: int(0,1440)
   device: str
   gain: str
   ppm: int
@@ -54,7 +67,6 @@ schema:
   sweep_dwell_s: int(10,1800)
   sweep_integration_s: int(1,60)
   peak_threshold_db: float(3,40)
-  monitor_hourly_survey_min: int(0,30)
   publish_raw: bool
   base_topic: str
   discovery_prefix: str

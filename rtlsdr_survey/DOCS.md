@@ -10,8 +10,15 @@ One RTL-SDR dongle, time-sliced between three tools:
 
 **Survey mode** cycles through every slot in `survey_plan.yaml` indefinitely, for days if you like. It builds an inventory of every device it hears: what type it is, which slot heard it, how often, SNR, and the latest raw and parsed output. Nothing goes to Home Assistant until you tick **In HA** for a device. Then it publishes MQTT discovery, and the device shows up with proper sensor entities.
 
-**Monitor mode** only visits the slots where your approved devices live. With one slot, the dongle stays there.
-`monitor_hourly_survey_min` can keep a few minutes per hour for continued surveying.
+**Monitor mode** watches only the devices you approved. The dongle parks on a **home frequency**: the one with the most event-driven devices (door/window sensors, motion, remotes, doorbells), since those only transmit when something happens. It leaves home only when devices on another frequency haven't reported for `monitor_refresh_min`. That visit ends as soon as they have all reported, or after `monitor_dwell_s` at most.
+
+**Auto mode** (default) surveys inside `survey_schedule` (default 01:00–05:00 local) and monitors the rest of the day. While it monitors, it spends `daytime_survey_min_per_hour` (5) minutes each hour surveying one randomly chosen frequency, at a random time. That catches devices that are only active in the daytime, such as garage remotes and car TPMS. New devices join the Devices list as they're heard; you choose which to approve. Auto keeps surveying until at least one device is approved. Optionally, `initial_survey: true` surveys around the clock for the first `initial_survey_days` to build the list faster.
+
+**Monitor mode** is monitoring only: no scheduled, random or fallback surveying. With nothing approved, it idles.
+
+**Stale devices:** timer-reporting devices (temperature, weather, TPMS...) get HA's `expire_after`, so their entities go *unavailable* after `stale_after_min` (120) without a report. Event devices are exempt, because silence is normal for them.
+
+Event-driven devices on a frequency other than home are only heard while the dongle visits it. If you have door sensors on two different frequencies, a second dongle is the real fix.
 
 ## Radiosondes
 
@@ -59,7 +66,14 @@ If HA runs as a Proxmox VM, pass the dongle (or its USB controller) through to t
 
 | Option | Default | Notes |
 |---|---|---|
-| `mode` | survey | `survey` or `monitor`. The UI button overrides it until you change this option. |
+| `mode` | auto | `auto`, `survey` or `monitor`. The UI selector overrides it until you change this option. |
+| `survey_schedule` | 01:00-05:00 | Auto mode: local-time survey windows (comma-separated, may wrap midnight) |
+| `initial_survey` | false | Auto mode: survey around the clock at first (optional) |
+| `initial_survey_days` | 7 | Length of that initial survey |
+| `daytime_survey_min_per_hour` | 5 | Auto mode: random daytime survey minutes per hour (0 = off) |
+| `monitor_dwell_s` | 90 | Longest visit to a non-home frequency in monitor mode |
+| `monitor_refresh_min` | 10 | Revisit a frequency when its devices are this stale |
+| `stale_after_min` | 120 | HA `expire_after` for timer-reporting devices (0 = off) |
 | `device` | "0" | Dongle index or serial number (set unique serials with `rtl_eeprom -s`) |
 | `gain` | auto | or dB, e.g. `40.2` |
 | `ppm` | 0 | Frequency correction |

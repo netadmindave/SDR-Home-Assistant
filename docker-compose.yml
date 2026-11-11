@@ -14,7 +14,9 @@ services:
     volumes:
       - ./data:/data
     environment:
-      RTLSDR_MODE: survey
+      TZ: America/New_York
+      RTLSDR_SURVEY_SCHEDULE: "01:00-05:00"
+      RTLSDR_MODE: auto
       RTLSDR_DEVICE: "0"
       RTLSDR_GAIN: auto
       RTLSDR_MQTT_HOST: 192.168.1.10      # your broker

@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import shutil
+import time
 import urllib.request
 from pathlib import Path
 
@@ -11,7 +12,14 @@ import yaml
 log = logging.getLogger("config")
 
 DEFAULTS = {
-    "mode": "survey",            # survey | monitor
+    "mode": "auto",              # survey | monitor | auto
+    "survey_schedule": "01:00-05:00",   # local time; auto mode surveys inside, monitors outside
+    "initial_survey": False,            # auto mode: survey around the clock at first...
+    "initial_survey_days": 7,           # ...for this many days
+    "daytime_survey_min_per_hour": 5,   # auto mode: random survey minutes each monitored hour
+    "monitor_dwell_s": 90,              # max visit to a non-home slot in monitor mode
+    "monitor_refresh_min": 10,          # revisit a slot when its devices are this stale
+    "stale_after_min": 120,             # HA expire_after for periodic devices (0 = off)
     "device": "0",               # dongle index or serial
     "gain": "auto",              # "auto" or dB (e.g. 40.2)
     "ppm": 0,
@@ -19,7 +27,6 @@ DEFAULTS = {
     "sweep_dwell_s": 45,
     "sweep_integration_s": 5,
     "peak_threshold_db": 10.0,
-    "monitor_hourly_survey_min": 0,  # in monitor mode, spend N min/hour surveying
     "mqtt_host": "",
     "mqtt_port": 1883,
     "mqtt_user": "",
@@ -104,7 +111,8 @@ def _supervisor_location():
             data = json.load(r)
         if data.get("latitude") is not None:
             return {"station_lat": float(data["latitude"]), "station_lon": float(data["longitude"]),
-                    "station_alt": float(data.get("elevation") or 0)}
+                    "station_alt": float(data.get("elevation") or 0),
+                    "_time_zone": data.get("time_zone")}
     except Exception as e:  # noqa: BLE001
         log.warning("Could not read Home Assistant location: %s", e)
     return None
@@ -122,13 +130,19 @@ def load_options() -> dict:
         ev = os.environ.get(ENV_PREFIX + k.upper())
         if ev is not None:
             opts[k] = _coerce(d, ev)
+    opts.pop("monitor_hourly_survey_min", None)   # replaced by daytime_survey_min_per_hour
     if not opts["mqtt_host"]:
         sup = _supervisor_mqtt()
         if sup:
             opts.update(sup)
-    if not opts["station_lat"] and not opts["station_lon"]:
-        loc = _supervisor_location()
-        if loc:
+    loc = _supervisor_location()
+    if loc:
+        tz = loc.pop("_time_zone", None)
+        if tz and not os.environ.get("TZ"):
+            os.environ["TZ"] = tz
+            time.tzset()
+            log.info("Time zone taken from Home Assistant: %s", tz)
+        if not opts["station_lat"] and not opts["station_lon"]:
             opts.update(loc)
             log.info("Station location taken from Home Assistant")
     return opts

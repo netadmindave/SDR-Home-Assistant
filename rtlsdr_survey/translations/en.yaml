@@ -1,7 +1,27 @@
 configuration:
   mode:
     name: Mode
-    description: "survey: rotate through every slot in the plan. monitor: only the slots where approved devices were heard."
+    description: "auto: survey during the survey schedule plus short random daytime slots, monitor otherwise. survey: always survey. monitor: monitoring only, never surveys."
+  survey_schedule:
+    name: Survey schedule (local time)
+    description: "Auto mode surveys inside these windows, e.g. 01:00-05:00. Comma-separate several; may wrap midnight."
+  initial_survey:
+    name: Initial survey
+    description: Optional. Auto mode surveys around the clock for the first days after first start, to build the device list faster.
+  initial_survey_days:
+    name: Initial survey length (days)
+  daytime_survey_min_per_hour:
+    name: Daytime survey (min per hour)
+    description: Auto mode spends this many minutes per monitored hour surveying one randomly chosen frequency, at a random time. 0 disables.
+  monitor_dwell_s:
+    name: Monitor visit length (s)
+    description: Longest visit to a non-home frequency in monitor mode; a visit ends early once all its devices have reported.
+  monitor_refresh_min:
+    name: Monitor refresh (min)
+    description: Revisit a frequency when its devices haven't been heard for this long. The rest of the time the dongle parks on the home frequency.
+  stale_after_min:
+    name: Mark stale after (min)
+    description: Timer-reporting devices go unavailable in HA after this long without a report. Event devices (door sensors, remotes) are exempt. 0 disables.
   device:
     name: Dongle
     description: RTL-SDR device index (0) or serial number.
@@ -21,8 +41,6 @@ configuration:
   peak_threshold_db:
     name: Peak threshold (dB)
     description: How far above the noise floor a sweep bin must be to count as a signal.
-  monitor_hourly_survey_min:
-    name: Survey minutes per hour in monitor mode
   publish_raw:
     name: Publish raw survey events
     description: Publish every decode (approved or not) to <base_topic>/survey/<uid>.

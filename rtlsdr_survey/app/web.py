@@ -81,7 +81,7 @@ def build_app(scanner, db, mqtt):
         try:
             scanner.set_mode(body.get("mode"))
         except ValueError:
-            raise web.HTTPBadRequest(text="mode must be survey or monitor")
+            raise web.HTTPBadRequest(text="mode must be auto, survey or monitor")
         return web.json_response({"mode": scanner.mode})
 
     async def radiosonde_now(req):

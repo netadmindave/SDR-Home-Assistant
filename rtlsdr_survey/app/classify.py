@@ -12,6 +12,14 @@ REMOTE_HINTS = ("remote", "keyfob", "key-fob", "button", "switch", "garage", "pr
                 "chamberlain", "secplus", "fan", "ceiling", "lightwave", "brennenstuhl")
 
 
+EVENT_CATEGORIES = ("Security", "Motion", "Doorbell", "Remote", "Smoke", "Water leak")
+
+
+def is_event_device(category) -> bool:
+    """Devices that transmit on events (door opened, button pressed) rather than on a timer."""
+    return any(c in (category or "") for c in EVENT_CATEGORIES)
+
+
 def uid_for(key: str) -> str:
     return hashlib.sha1(key.encode()).hexdigest()[:12]
 

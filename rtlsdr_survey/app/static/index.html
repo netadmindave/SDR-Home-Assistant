@@ -59,7 +59,9 @@
   <span id="rsinfo" class="mute"></span>
   <button id="rsnow" title="Run radiosonde_auto_rx now for 2 hours">Track sondes now</button>
   <button id="skip">Skip slot</button>
-  <button id="toggleMode" class="primary"></button>
+  <select id="modeSel" title="auto: survey on schedule, monitor otherwise">
+    <option value="auto">Auto</option><option value="survey">Survey only</option><option value="monitor">Monitor only</option>
+  </select>
 </header>
 <nav>
   <button data-tab="devices" class="on">Devices <span id="ndev" class="mute"></span></button>
@@ -98,6 +100,7 @@
   </section>
 
   <section id="tab-coverage" class="panel" hidden>
+    <div id="moninfo" class="mute" style="margin-bottom:10px"></div>
     <div class="tools"><span id="cyc" class="mute"></span><span style="flex:1"></span>
       <button id="reset">Reset survey data</button></div>
     <table><thead><tr><th>Slot</th><th>Decoder</th><th>Frequency</th><th class="num">Runs</th>
@@ -180,12 +183,22 @@ function renderSignals() {
 }
 
 function renderStatus() {
-  $("#mode").textContent = "mode: " + ST.mode;
-  $("#toggleMode").textContent = ST.mode === "survey" ? "Switch to monitor" : "Switch to survey";
+  let mt = ST.mode === "auto" ? `auto → ${ST.effective_mode}` : ST.mode;
+  if (ST.mode === "auto" && ST.effective_mode === "survey" && !ST.monitor) mt += " (no approved devices yet)";
+  else if (ST.mode === "monitor" && !ST.monitor) mt += " · idle: no approved devices";
+  else if (ST.mode === "auto" && ST.effective_mode === "monitor" && ST.next_day_survey) mt += " · next daytime survey " + new Date(ST.next_day_survey*1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+  else if (ST.mode === "auto" && ST.initial_survey_until) mt += " · initial survey until " + new Date(ST.initial_survey_until*1000).toLocaleDateString();
+  else if (ST.mode === "auto" && ST.survey_schedule) mt += " · survey " + ST.survey_schedule;
+  $("#mode").textContent = "mode: " + mt;
+  if (document.activeElement !== $("#modeSel")) $("#modeSel").value = ST.mode;
+  const M = ST.monitor;
+  $("#moninfo").innerHTML = M ? `<b>Monitor plan</b> · home frequency: <b>${esc(M.home)}</b> (dongle parks here) · ` +
+    M.slots.map(s => `${esc(s.name)}: ${s.devices} device${s.devices>1?"s":""}${s.event_devices?` (${s.event_devices} event)`:""}, oldest report ${dur(s.oldest_age_s)} ago`).join(" · ")
+    : "Monitor plan: approve devices to build one.";
   const m = $("#mqtt"); m.className = "pill " + (ST.mqtt_connected ? "ok" : "bad");
   m.textContent = ST.mqtt_host ? (ST.mqtt_connected ? "MQTT connected" : "MQTT disconnected") : "MQTT not configured";
   const c = ST.current;
-  if (c) { $("#nowtxt").innerHTML = `<b>${esc(c.name)}</b> · ${esc(c.decoder)} · ${esc(c.freq)} · ${c.elapsed}s / ${c.dwell}s · ${c.events} events`;
+  if (c) { $("#nowtxt").innerHTML = `<b>${esc(c.name)}</b> · ${esc(c.decoder)} · ${esc(c.freq)} · ${c.elapsed}s / ${c.dwell}s · ${c.events} events` + (c.waiting_for ? ` · waiting for ${c.waiting_for} device(s)` : "");
            $("#nowbar").style.width = Math.min(100, 100*c.elapsed/c.dwell) + "%"; }
   else { $("#nowtxt").textContent = "between slots…"; $("#nowbar").style.width = "0"; }
   const r = ST.radiosonde || {};
@@ -236,7 +249,7 @@ document.addEventListener("click", async e => {
 $("#minhits").addEventListener("input", refresh);
 $("#rsnow").onclick = () => post("api/radiosonde", {minutes: (ST.current && ST.current.decoder === "auto_rx") ? 0 : 120}).then(refresh);
 $("#skip").onclick = () => post("api/skip").then(refresh);
-$("#toggleMode").onclick = () => post("api/mode", {mode: ST.mode === "survey" ? "monitor" : "survey"}).then(refresh);
+$("#modeSel").onchange = e => post("api/mode", {mode: e.target.value}).then(refresh);
 $("#reset").onclick = () => confirm("Delete all survey data except approved devices?") && post("api/reset").then(refresh);
 refresh(); setInterval(refresh, 4000);
 </script>
