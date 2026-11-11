@@ -1,0 +1,72 @@
+configuration:
+  mode:
+    name: Mode
+    description: "survey: rotate through every slot in the plan. monitor: only the slots where approved devices were heard."
+  device:
+    name: Dongle
+    description: RTL-SDR device index (0) or serial number.
+  gain:
+    name: Gain
+    description: "auto, or a tuner gain in dB such as 40.2."
+  ppm:
+    name: Frequency correction (ppm)
+  decode_dwell_s:
+    name: Decode dwell (s)
+    description: Seconds spent on each rtl_433 frequency, multiplied by the slot's weight.
+  sweep_dwell_s:
+    name: Sweep dwell (s)
+    description: Seconds spent sweeping each band with rtl_power.
+  sweep_integration_s:
+    name: Sweep integration (s)
+  peak_threshold_db:
+    name: Peak threshold (dB)
+    description: How far above the noise floor a sweep bin must be to count as a signal.
+  monitor_hourly_survey_min:
+    name: Survey minutes per hour in monitor mode
+  publish_raw:
+    name: Publish raw survey events
+    description: Publish every decode (approved or not) to <base_topic>/survey/<uid>.
+  base_topic:
+    name: MQTT base topic
+  discovery_prefix:
+    name: HA discovery prefix
+  log_level:
+    name: Log level
+  mqtt_host:
+    name: MQTT host
+    description: Leave empty to use the Mosquitto add-on automatically.
+  mqtt_port:
+    name: MQTT port
+  mqtt_user:
+    name: MQTT user
+  mqtt_password:
+    name: MQTT password
+  rtl_433_extra_args:
+    name: Extra rtl_433 arguments
+    description: "e.g. -R -59 to disable a noisy decoder."
+  radiosonde_enabled:
+    name: Track radiosondes
+    description: Hand the dongle to radiosonde_auto_rx during the launch windows.
+  radiosonde_windows_utc:
+    name: Radiosonde windows (UTC)
+    description: "Comma-separated HH:MM-HH:MM windows in UTC; may wrap midnight."
+  radiosonde_min_mhz:
+    name: Radiosonde search start (MHz)
+  radiosonde_max_mhz:
+    name: Radiosonde search end (MHz)
+  radiosonde_publish_ha:
+    name: Publish Radiosonde tracker to HA
+  sondehub_callsign:
+    name: SondeHub callsign
+    description: Set to upload your sonde reception to sondehub.org. Empty disables uploads.
+  sondehub_email:
+    name: SondeHub contact email
+  station_lat:
+    name: Station latitude
+    description: Leave empty to use Home Assistant's home location.
+  station_lon:
+    name: Station longitude
+  station_alt:
+    name: Station altitude (m)
+network:
+  5000/tcp: radiosonde_auto_rx web map (only live during sonde windows)

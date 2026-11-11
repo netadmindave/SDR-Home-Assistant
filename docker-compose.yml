@@ -1,0 +1,29 @@
+# Standalone use (outside the HA add-on system).
+# Host prep: blacklist the DVB driver so the dongle is free:
+#   echo 'blacklist dvb_usb_rtl28xxu' | sudo tee /etc/modprobe.d/rtlsdr-blacklist.conf && sudo modprobe -r dvb_usb_rtl28xxu
+services:
+  rtlsdr-survey:
+    build: ./rtlsdr_survey
+    container_name: rtlsdr-survey
+    restart: unless-stopped
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    ports:
+      - "8099:8099"
+      - "5000:5000"   # radiosonde_auto_rx map (only live during sonde windows)
+    volumes:
+      - ./data:/data
+    environment:
+      RTLSDR_MODE: survey
+      RTLSDR_DEVICE: "0"
+      RTLSDR_GAIN: auto
+      RTLSDR_MQTT_HOST: 192.168.1.10      # your broker
+      RTLSDR_MQTT_PORT: 1883
+      RTLSDR_MQTT_USER: ""
+      RTLSDR_MQTT_PASSWORD: ""
+      RTLSDR_DECODE_DWELL_S: 300
+      RTLSDR_SWEEP_DWELL_S: 45
+      RTLSDR_STATION_LAT: 0.0          # your location, for sonde distance/bearing
+      RTLSDR_STATION_LON: 0.0
+      RTLSDR_RADIOSONDE_WINDOWS_UTC: "10:45-13:30,22:45-01:30"
+      RTLSDR_SONDEHUB_CALLSIGN: ""     # set to upload to SondeHub

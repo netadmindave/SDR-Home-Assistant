@@ -1,0 +1,76 @@
+name: RTL-SDR Survey
+version: "0.2.0"
+slug: rtlsdr_survey
+description: >-
+  One RTL-SDR, time-sliced between rtl_433 decoding, rtl_power sweeps and
+  radiosonde_auto_rx weather-balloon tracking at launch times. Surveys the
+  unlicensed bands for days, lists every device heard, and publishes the ones
+  you approve to Home Assistant over MQTT.
+url: https://github.com/netadmindave/SDR-Home-Assistant
+arch:
+  - amd64
+  - aarch64
+usb: true
+udev: true
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:radio-tower
+panel_title: SDR Survey
+homeassistant_api: true
+services:
+  - mqtt:want
+ports:
+  5000/tcp: null
+ports_description:
+  5000/tcp: radiosonde_auto_rx web map (optional)
+map:
+  - addon_config:rw
+options:
+  mode: survey
+  device: "0"
+  gain: auto
+  ppm: 0
+  decode_dwell_s: 300
+  sweep_dwell_s: 45
+  sweep_integration_s: 5
+  peak_threshold_db: 10
+  monitor_hourly_survey_min: 0
+  publish_raw: true
+  base_topic: rtlsdr
+  discovery_prefix: homeassistant
+  log_level: info
+  radiosonde_enabled: true
+  radiosonde_windows_utc: "10:45-13:30,22:45-01:30"
+  radiosonde_min_mhz: 400.05
+  radiosonde_max_mhz: 405.95
+  radiosonde_publish_ha: true
+  sondehub_callsign: ""
+schema:
+  mode: list(survey|monitor)
+  device: str
+  gain: str
+  ppm: int
+  decode_dwell_s: int(30,7200)
+  sweep_dwell_s: int(10,1800)
+  sweep_integration_s: int(1,60)
+  peak_threshold_db: float(3,40)
+  monitor_hourly_survey_min: int(0,30)
+  publish_raw: bool
+  base_topic: str
+  discovery_prefix: str
+  log_level: list(debug|info|warning|error)
+  mqtt_host: str?
+  mqtt_port: port?
+  mqtt_user: str?
+  mqtt_password: password?
+  rtl_433_extra_args: str?
+  radiosonde_enabled: bool
+  radiosonde_windows_utc: str
+  radiosonde_min_mhz: float(400,406)
+  radiosonde_max_mhz: float(400,406)
+  radiosonde_publish_ha: bool
+  sondehub_callsign: str?
+  sondehub_email: email?
+  station_lat: float?
+  station_lon: float?
+  station_alt: float?

@@ -1,0 +1,90 @@
+# Survey plan: what the single dongle visits, in round-robin order.
+#
+# A copy of this file is written to the config folder on first start
+# (/config/survey_plan.yaml in the add-on, /data/survey_plan.yaml standalone).
+# Edit that copy and restart to change the plan.
+#
+# decode slots  - run a decoder (rtl_433) on one frequency for `dwell` seconds
+# sweep slots   - run rtl_power across a band for `dwell` seconds and log energy peaks
+#                 that may be undecoded transmitters
+#
+# `dwell` is optional; it falls back to decode_dwell_s / sweep_dwell_s from the options.
+# Set `enabled: false` to skip a slot without deleting it.
+
+decode:
+  # ---- Part 15.231 remotes / TPMS / security (rtl_433) ----
+  - name: "433.92 MHz sensors"
+    decoder: rtl_433
+    freq: 433.92M
+    sample_rate: 250k
+    weight: 3            # visited 3x as long as a normal slot: most sensors live here
+  - name: "315 MHz TPMS/fobs"
+    decoder: rtl_433
+    freq: 315M
+    sample_rate: 250k
+    weight: 2
+  - name: "345 MHz security"
+    decoder: rtl_433
+    freq: 345M
+    sample_rate: 250k
+  - name: "310 MHz remotes"
+    decoder: rtl_433
+    freq: 310M
+    sample_rate: 250k
+  - name: "318 MHz remotes"
+    decoder: rtl_433
+    freq: 318M
+    sample_rate: 250k
+  - name: "303.875 MHz fans/remotes"
+    decoder: rtl_433
+    freq: 303.875M
+    sample_rate: 250k
+  - name: "390 MHz garage"
+    decoder: rtl_433
+    freq: 390M
+    sample_rate: 250k
+  # ---- 902-928 MHz ISM ----
+  - name: "915 MHz sensors"
+    decoder: rtl_433
+    freq: 915M
+    sample_rate: 1024k
+    weight: 2
+  # ---- other ISM (few rtl_433 decoders, mostly here for completeness) ----
+  - name: "27 MHz ISM"
+    decoder: rtl_433
+    freq: 27.145M
+    sample_rate: 250k
+    weight: 0.5
+  - name: "868.3 MHz (EU SRD)"
+    decoder: rtl_433
+    freq: 868.3M
+    sample_rate: 1024k
+    enabled: false       # EU band; enable if you have imported EU devices
+
+sweep:
+  # range is low:high:bin (rtl_power syntax)
+  - name: "27 MHz ISM / CB"
+    range: 26.95M:27.41M:5k
+  - name: "40.68 MHz ISM"
+    range: 40.6M:40.76M:5k
+  - name: "49.8 MHz Part 15"
+    range: 49.78M:49.92M:5k
+  - name: "72-76 MHz RC"
+    range: 72M:76M:10k
+  - name: "MURS low"
+    range: 151.78M:151.98M:5k
+  - name: "MURS high"
+    range: 154.54M:154.62M:5k
+  - name: "300-320 MHz remotes/TPMS"
+    range: 300M:320M:10k
+  - name: "340-350 MHz"
+    range: 340M:350M:10k
+  - name: "385-395 MHz"
+    range: 385M:395M:10k
+  - name: "425-440 MHz (433 ISM / 70cm)"
+    range: 425M:440M:10k
+  - name: "FRS/GMRS"
+    range: 462.5M:467.75M:12.5k
+  - name: "902-928 MHz ISM"
+    range: 902M:928M:25k
+    dwell: 120
