@@ -172,10 +172,18 @@ async def _sv(session, method, path, body=None):
     headers = {"Authorization": f"Bearer {os.environ['SUPERVISOR_TOKEN']}"}
     async with session.request(method, SUPERVISOR + path, json=body, headers=headers,
                                timeout=aiohttp.ClientTimeout(total=15)) as r:
-        data = await r.json(content_type=None)
-        if r.status >= 400 or (data or {}).get("result") == "error":
-            raise RuntimeError((data or {}).get("message") or f"HTTP {r.status}")
-        return (data or {}).get("data")
+        text = await r.text()
+        try:
+            data = json.loads(text) if text.strip() else {}
+        except ValueError:          # Supervisor answers some errors in plain text ("403: Forbidden")
+            data = {"result": "error", "message": text.strip()[:200]}
+        if r.status >= 400 or data.get("result") == "error":
+            msg = data.get("message") or f"HTTP {r.status}"
+            if r.status in (401, 403):
+                msg += (" (the add-on isn't allowed to change its own options; make sure you're on "
+                        "v0.4.0+ so hassio_api is enabled, then restart the add-on)")
+            raise RuntimeError(f"{method} {path}: {msg}")
+        return data.get("data")
 
 
 async def save(clean):
@@ -191,7 +199,6 @@ async def save(clean):
                 else:
                     options[k] = v
             options.pop("monitor_hourly_survey_min", None)
-            await _sv(s, "POST", "/addons/self/options/validate", {"options": options})
             await _sv(s, "POST", "/addons/self/options", {"options": options})
             return options
     f = data_dir() / OVERRIDE_FILE

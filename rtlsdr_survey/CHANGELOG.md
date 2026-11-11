@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+- Fix Settings "Could not save: Extra data: line 1 column 4": the add-on called the Supervisor's
+  options/validate endpoint, which add-ons aren't allowed to use (plain-text 403). Validation is
+  done by the add-on itself; Supervisor errors are now shown readably.
+
 ## 0.5.0
 - Build rtl_433 from its development branch instead of the 25.12 release: ~100 more decoders
   (392 vs 291), including many US car remotes, TPMS sensors, garage openers (Chamberlain),
