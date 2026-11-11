@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2
+- UI: right-align numeric column headers so values line up under the right heading
+  (Coverage table looked like decoded frames were errors).
+
 ## 0.3.1
 - Initial round-the-clock survey is now opt-in (`initial_survey`, default off).
 - Auto mode adds short random daytime survey slots (`daytime_survey_min_per_hour`, default 5),
