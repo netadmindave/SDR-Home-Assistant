@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+- Fix build on Home Assistant: runtime image is now pinned to debian:bookworm-slim instead of
+  Supervisor's default Alpine base ("apt-get: not found").
+
 ## 0.2.0
 - Added radiosonde_auto_rx: weather-balloon tracking during configurable UTC launch windows,
   a "Radiosonde tracker" HA device with GPS device_tracker, optional SondeHub upload.

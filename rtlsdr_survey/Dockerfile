@@ -1,6 +1,7 @@
 # RTL-SDR Survey: rtl_433 + rtl_power + radiosonde_auto_rx time-sliced on one dongle, MQTT + HA discovery.
-# Works as a Home Assistant add-on (BUILD_FROM is supplied by build.yaml) or as a plain container.
-ARG BUILD_FROM=debian:bookworm-slim
+# Works as a Home Assistant add-on or as a plain container.
+# The runtime stage is pinned to Debian on purpose: Supervisor's default BUILD_FROM is the
+# Alpine-based HA base image, and every stage here needs apt + glibc.
 
 # ---------------------------------------------------------------- C tools
 FROM debian:bookworm-slim AS cbuild
@@ -31,13 +32,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone https://github.com/projecthorus/radiosonde_auto_rx.git /src/autorx \
     && cd /src/autorx && git checkout ${AUTORX_REF} \
-    && cd auto_rx && sh build.sh \
+    && cd auto_rx && bash build.sh \
     && mkdir -p /opt && cp -r /src/autorx/auto_rx /opt/auto_rx && cp /src/autorx/LICENSE /opt/auto_rx/
 RUN python3 -m venv /opt/autorx-venv \
     && /opt/autorx-venv/bin/pip install --no-cache-dir -r /opt/auto_rx/requirements.txt
 
 # ---------------------------------------------------------------- runtime
-FROM ${BUILD_FROM}
+FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libusb-1.0-0 libfftw3-single3 sox python3 python3-aiohttp python3-paho-mqtt python3-yaml ca-certificates \
