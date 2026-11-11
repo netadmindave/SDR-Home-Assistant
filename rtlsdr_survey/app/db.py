@@ -56,7 +56,7 @@ class DB:
                       freq_mhz, rssi, snr, state, raw):
         now = time.time()
         with self.lock, self.c:
-            cur = self.c.execute("SELECT uid FROM devices WHERE uid=?", (uid,)).fetchone()
+            cur = self.c.execute("SELECT uid, last_state FROM devices WHERE uid=?", (uid,)).fetchone()
             if cur is None:
                 self.c.execute(
                     """INSERT INTO devices(uid,key,source,model,dev_id,channel,category,slot,freq_mhz,
@@ -65,11 +65,15 @@ class DB:
                     (uid, key, source, model, dev_id, channel, category, slot, freq_mhz,
                      now, now, rssi, snr, json.dumps(state), json.dumps(raw)))
                 return True
+            # Many devices alternate message types (e.g. temp/humidity vs wind), so keep the
+            # union of fields: new values overwrite, fields absent from this message persist.
+            merged = json.loads(cur["last_state"] or "{}")
+            merged.update(state)
             self.c.execute(
                 """UPDATE devices SET last_seen=?, count=count+1, slot=?, category=?,
                    freq_mhz=COALESCE(?,freq_mhz), rssi=COALESCE(?,rssi), snr=COALESCE(?,snr),
                    last_state=?, last_raw=? WHERE uid=?""",
-                (now, slot, category, freq_mhz, rssi, snr, json.dumps(state), json.dumps(raw), uid))
+                (now, slot, category, freq_mhz, rssi, snr, json.dumps(merged), json.dumps(raw), uid))
             return False
 
     def device(self, uid):

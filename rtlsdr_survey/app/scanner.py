@@ -432,4 +432,4 @@ class Scanner:
         if new:
             self.note(f"New device: {category} — {model} id={dev_id} on {slot['name']}")
         self.mqtt.raw_event(dev, raw)
-        self.mqtt.device_state(dev, state)
+        self.mqtt.device_state(dev, json.loads(dev["last_state"] or "{}"))

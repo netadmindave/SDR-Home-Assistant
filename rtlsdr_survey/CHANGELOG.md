@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+- Fix devices that alternate message types (e.g. LaCrosse-TX141W sends temp/humidity and wind
+  in separate packets): state is now merged, so fields missing from one packet keep their last
+  value, and HA entities are added when a new field first appears after approval.
+- Drop rtl_433's "test" flag as an HA entity (and remove it if already created).
+
 ## 0.2.1
 - Fix build on Home Assistant: runtime image is now pinned to debian:bookworm-slim instead of
   Supervisor's default Alpine base ("apt-get: not found").

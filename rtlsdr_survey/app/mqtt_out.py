@@ -19,7 +19,7 @@ class MQTTOut:
         self.disc = opts["discovery_prefix"].rstrip("/")
         self.connected = False
         self.client = None
-        self._announced = set()   # uid -> discovery already sent this session
+        self._announced = {}      # uid -> set of fields announced this session
         if not opts.get("mqtt_host"):
             log.warning("No MQTT broker configured; running without MQTT")
             return
@@ -70,8 +70,9 @@ class MQTTOut:
     def device_state(self, dev, state):
         if not dev.get("approved"):
             return
-        if dev["uid"] not in self._announced:
-            self.announce(dev)
+        fields = {f for f, _ in self._components(dict(dev, last_state=json.dumps(state)))}
+        if not fields <= self._announced.get(dev["uid"], set()):
+            self.announce(dict(dev, last_state=json.dumps(state)))
         payload = dict(state)
         payload["last_seen"] = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
         self.pub(self._state_topic(dev), payload, retain=True)
@@ -134,7 +135,11 @@ class MQTTOut:
             if ecat:
                 cfg["entity_category"] = ecat
             self.pub(f"{self.disc}/{comp}/rtlsdr_{dev['uid']}/{field}/config", cfg, retain=True)
-        self._announced.add(dev["uid"])
+        # remove entities for fields we no longer expose (e.g. rtl_433's "test" flag in 0.2.x)
+        for field in json.loads(dev.get("last_state") or "{}"):
+            if field in SKIP_ENTITY:
+                self.pub(f"{self.disc}/sensor/rtlsdr_{dev['uid']}/{field}/config", "", retain=True)
+        self._announced[dev["uid"]] = {f for f, _ in self._components(dev)}
         log.info("HA discovery published for %s (%s)", name, dev["key"])
 
     def unannounce(self, dev):
@@ -143,7 +148,7 @@ class MQTTOut:
         for field, (comp, *_r) in self._components(dev):
             self.pub(f"{self.disc}/{comp}/rtlsdr_{dev['uid']}/{field}/config", "", retain=True)
         self.pub(self._state_topic(dev), "", retain=True)
-        self._announced.discard(dev["uid"])
+        self._announced.pop(dev["uid"], None)
 
     # ------------------------------------------------------------ radiosonde tracker
     def announce_radiosonde(self):

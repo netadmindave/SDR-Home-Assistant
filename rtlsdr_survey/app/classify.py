@@ -125,7 +125,7 @@ FIELD_MAP = {
     "motion": ("binary_sensor", "motion", None, None, None),
     "leak_now": ("sensor", None, None, None, None),
 }
-SKIP_ENTITY = {"model", "id", "channel", "subtype", "freq", "freq1", "freq2", "noise", "protocol_id", "last_seen", "slot", "type", "event", "heartbeat", "reed_open"}
+SKIP_ENTITY = {"test", "model", "id", "channel", "subtype", "freq", "freq1", "freq2", "noise", "protocol_id", "last_seen", "slot", "type", "event", "heartbeat", "reed_open"}
 
 
 NICE_NAMES = {"rssi": "RSSI", "snr": "SNR", "battery_ok": "Battery", "contact_open": "Contact",
