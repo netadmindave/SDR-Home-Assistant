@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0
+- Build rtl_433 from its development branch instead of the 25.12 release: ~100 more decoders
+  (392 vs 291), including many US car remotes, TPMS sensors, garage openers (Chamberlain),
+  2GIG/Vivint security, Kidde smoke alarms, Govee sensors and Silver Spring mesh meters.
+- New `survey_all_decoders` option (Settings → Survey): survey slots also enable rtl_433's
+  ~50 off-by-default decoders. Monitoring always uses the default set.
+
+## 0.4.0
+- New **Settings** tab in the web UI with every option, grouped, with validation.
+  Saving writes back to the add-on configuration (Supervisor API), so the HA Configuration tab
+  stays in sync. Most settings apply immediately; MQTT/topic/log-level changes restart the
+  add-on automatically. Standalone Docker: saved to /data/settings_override.json.
+- The header mode selector now also saves to the add-on configuration.
+
 ## 0.3.2
 - UI: right-align numeric column headers so values line up under the right heading
   (Coverage table looked like decoded frames were errors).

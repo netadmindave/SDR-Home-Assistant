@@ -18,7 +18,7 @@ async def main():
         level=getattr(logging, str(opts["log_level"]).upper(), logging.INFO),
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     log = logging.getLogger("main")
-    safe = {k: ("***" if "password" in k and v else v) for k, v in opts.items()}
+    safe = {k: ("***" if "password" in k and v else v) for k, v in opts.items() if k != "_user"}
     log.info("Options: %s", safe)
 
     plan = load_plan(opts)

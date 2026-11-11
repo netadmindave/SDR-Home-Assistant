@@ -1,8 +1,11 @@
 """aiohttp web UI + JSON API (works behind HA ingress: all URLs are relative)."""
+import asyncio
 import json
 from pathlib import Path
 
 from aiohttp import web
+
+import settings as st
 
 STATIC = Path(__file__).with_name("static")
 
@@ -82,6 +85,14 @@ def build_app(scanner, db, mqtt):
             scanner.set_mode(body.get("mode"))
         except ValueError:
             raise web.HTTPBadRequest(text="mode must be auto, survey or monitor")
+        # keep the add-on configuration in sync with the header selector
+        try:
+            new_user = await st.save({"mode": scanner.mode})
+            scanner.o["_user"] = new_user
+            scanner.o["mode"] = scanner.mode
+            db.set_setting("mode_option", scanner.mode)
+        except Exception as e:  # noqa: BLE001
+            scanner.note(f"Mode changed for now, but saving it to the config failed: {e}")
         return web.json_response({"mode": scanner.mode})
 
     async def radiosonde_now(req):
@@ -108,7 +119,41 @@ def build_app(scanner, db, mqtt):
         return web.json_response(data, headers={
             "Content-Disposition": "attachment; filename=rtlsdr_survey.json"})
 
+    async def get_settings(_):
+        return web.json_response(st.describe(scanner.o))
+
+    async def post_settings(req):
+        body = await req.json()
+        clean, errors = st.validate(body.get("changes") or {})
+        if errors:
+            return web.json_response({"ok": False, "errors": errors}, status=400)
+        user = scanner.o.get("_user") or {}
+        clean = {k: v for k, v in clean.items() if user.get(k) != v}   # only real changes
+        if not clean:
+            return web.json_response({"ok": True, "changed": [], "restart": False})
+        try:
+            new_user = await st.save(clean)
+        except Exception as e:  # noqa: BLE001
+            return web.json_response({"ok": False, "errors": {"_": f"Could not save: {e}"}},
+                                     status=502)
+        scanner.o["_user"] = {k: v for k, v in new_user.items() if v is not None}
+        live = {k: v for k, v in clean.items() if st.SPEC_BY_KEY[k][6]}
+        needs_restart = any(not st.SPEC_BY_KEY[k][6] for k in clean)
+        if live:
+            scanner.apply_settings(live)
+        if needs_restart:
+            scanner.note("Settings need a restart; restarting in 2 s")
+
+            async def later():
+                await asyncio.sleep(2)
+                await st.restart()
+            asyncio.get_running_loop().create_task(later())
+        return web.json_response({"ok": True, "changed": sorted(clean), "restart": needs_restart,
+                                  "backend": "supervisor" if st.has_supervisor() else "file"})
+
     r.add_get("/", index)
+    r.add_get("/api/settings", get_settings)
+    r.add_post("/api/settings", post_settings)
     r.add_get("/api/status", status)
     r.add_get("/api/devices", devices)
     r.add_get("/api/signals", signals)

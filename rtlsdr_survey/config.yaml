@@ -1,5 +1,5 @@
 name: RTL-SDR Survey
-version: "0.3.2"
+version: "0.5.0"
 slug: rtlsdr_survey
 description: >-
   One RTL-SDR, time-sliced between rtl_433 decoding, rtl_power sweeps and
@@ -17,6 +17,7 @@ ingress_port: 8099
 panel_icon: mdi:radio-tower
 panel_title: SDR Survey
 homeassistant_api: true
+hassio_api: true
 services:
   - mqtt:want
 ports:
@@ -42,6 +43,7 @@ options:
   sweep_integration_s: 5
   peak_threshold_db: 10
   publish_raw: true
+  survey_all_decoders: false
   base_topic: rtlsdr
   discovery_prefix: homeassistant
   log_level: info
@@ -76,6 +78,7 @@ schema:
   mqtt_user: str?
   mqtt_password: password?
   rtl_433_extra_args: str?
+  survey_all_decoders: bool
   radiosonde_enabled: bool
   radiosonde_windows_utc: str
   radiosonde_min_mhz: float(400,406)

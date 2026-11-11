@@ -6,7 +6,9 @@
 # ---------------------------------------------------------------- C tools
 FROM debian:bookworm-slim AS cbuild
 ARG RTLSDR_REF=v1.3.6
-ARG RTL433_REF=25.12
+# rtl_433 development branch: ~100 more decoders than the 25.12 release (US car remotes, TPMS,
+# garage openers...). Pin a release tag (e.g. --build-arg RTL433_REF=25.12) if master breaks.
+ARG RTL433_REF=master
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake git pkg-config libusb-1.0-0-dev ca-certificates \
     && rm -rf /var/lib/apt/lists/*

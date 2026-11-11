@@ -62,6 +62,10 @@ Every option can be set as an env var: `RTLSDR_<OPTION_NAME_UPPERCASE>`.
 
 If HA runs as a Proxmox VM, pass the dongle (or its USB controller) through to the VM.
 
+## Settings tab
+
+Every option below is also in the web UI's **Settings** tab. Saving there writes to the add-on configuration through the Supervisor API, so it matches the Configuration tab in HA. Most settings apply immediately. Settings marked *restart* (MQTT broker, topics, log level) restart the add-on automatically. In standalone Docker, settings are saved to `/data/settings_override.json` and take priority over environment variables.
+
 ## Options
 
 | Option | Default | Notes |
@@ -82,6 +86,7 @@ If HA runs as a Proxmox VM, pass the dongle (or its USB controller) through to t
 | `sweep_integration_s` | 5 | rtl_power integration interval (peak hold is on) |
 | `peak_threshold_db` | 10 | dB above the per-hop median to count as a signal |
 | `publish_raw` | true | Publish every decode (approved or not) to `rtlsdr/survey/<uid>` |
+| `survey_all_decoders` | false | Survey slots also enable rtl_433's ~50 off-by-default decoders |
 | `rtl_433_extra_args` | | e.g. `-R -59` to disable a noisy decoder, or `-Y minmax` |
 | `radiosonde_enabled` | true | Hand the dongle to auto_rx during launch windows |
 | `radiosonde_windows_utc` | 10:45-13:30,22:45-01:30 | Comma-separated UTC windows, may wrap midnight |

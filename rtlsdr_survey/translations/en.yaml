@@ -62,6 +62,9 @@ configuration:
   rtl_433_extra_args:
     name: Extra rtl_433 arguments
     description: "e.g. -R -59 to disable a noisy decoder."
+  survey_all_decoders:
+    name: Enable all decoders while surveying
+    description: Also turn on rtl_433's off-by-default decoders during survey slots. Finds more devices; more false matches.
   radiosonde_enabled:
     name: Track radiosondes
     description: Hand the dongle to radiosonde_auto_rx during the launch windows.

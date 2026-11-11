@@ -35,6 +35,7 @@ DEFAULTS = {
     "discovery_prefix": "homeassistant",
     "publish_raw": True,
     "rtl_433_extra_args": "",
+    "survey_all_decoders": False,       # survey slots also enable rtl_433's off-by-default decoders
     "log_level": "info",
     "web_port": 8099,
     # radiosonde_auto_rx
@@ -120,17 +121,27 @@ def _supervisor_location():
 
 def load_options() -> dict:
     opts = dict(DEFAULTS)
+    user = {}   # what the user explicitly configured (shown/edited in the Settings tab)
     f = data_dir() / "options.json"
     if f.exists():
         try:
-            opts.update({k: v for k, v in json.loads(f.read_text()).items() if v is not None})
+            user.update({k: v for k, v in json.loads(f.read_text()).items() if v is not None})
         except Exception as e:  # noqa: BLE001
             log.error("Bad options.json: %s", e)
     for k, d in DEFAULTS.items():
         ev = os.environ.get(ENV_PREFIX + k.upper())
         if ev is not None:
-            opts[k] = _coerce(d, ev)
-    opts.pop("monitor_hourly_survey_min", None)   # replaced by daytime_survey_min_per_hour
+            user[k] = _coerce(d, ev)
+    # standalone: settings saved from the web UI win over env vars
+    ov = data_dir() / "settings_override.json"
+    if ov.exists() and not os.environ.get("SUPERVISOR_TOKEN"):
+        try:
+            user.update(json.loads(ov.read_text()))
+        except Exception as e:  # noqa: BLE001
+            log.error("Bad %s: %s", ov, e)
+    user.pop("monitor_hourly_survey_min", None)   # replaced by daytime_survey_min_per_hour
+    opts.update(user)
+    opts["_user"] = user
     if not opts["mqtt_host"]:
         sup = _supervisor_mqtt()
         if sup:

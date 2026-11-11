@@ -21,7 +21,7 @@
   .now { flex:1; min-width:260px; }
   .bar { height:5px; background:var(--chip); border-radius:3px; overflow:hidden; margin-top:4px; }
   .bar > i { display:block; height:100%; background:var(--acc); }
-  button, select, input[type=text] { font:inherit; color:var(--fg); background:var(--card);
+  button, select, input[type=text], input[type=number], input[type=password] { font:inherit; color:var(--fg); background:var(--card);
            border:1px solid var(--line); border-radius:6px; padding:5px 10px; }
   button { cursor:pointer; } button:hover { border-color:var(--acc); }
   button.primary { background:var(--acc); color:#fff; border-color:var(--acc); }
@@ -48,6 +48,19 @@
   .log div { padding:2px 0; border-bottom:1px dashed var(--line); }
   .ERROR { color:var(--bad);} .WARNING { color:var(--warn);}
   .empty { padding:30px; text-align:center; color:var(--mute); }
+  .sgroup { margin:4px 0 18px; }
+  .sgroup h3 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--mute); margin:0 0 6px; }
+  .srow { display:grid; grid-template-columns: 260px 260px 1fr; gap:12px; align-items:center;
+          padding:7px 0; border-bottom:1px solid var(--line); }
+  @media (max-width: 900px) { .srow { grid-template-columns: 1fr; gap:4px; } }
+  .srow input[type=text], .srow input[type=number], .srow input[type=password], .srow select { width:100%; }
+  .srow.dirty { background: color-mix(in srgb, var(--acc) 8%, transparent); }
+  .srow.bad input, .srow.bad select { border-color: var(--bad); }
+  .badge { font-size:11px; padding:1px 7px; border-radius:99px; background:var(--chip); color:var(--mute); margin-left:6px; }
+  .badge.rs { color:var(--warn); }
+  .savebar { position:sticky; bottom:0; background:var(--card); border-top:1px solid var(--line);
+             padding:10px 0; display:flex; gap:10px; align-items:center; }
+  .msg-ok { color:var(--ok); } .msg-bad { color:var(--bad); }
 </style>
 </head>
 <body>
@@ -68,6 +81,7 @@
   <button data-tab="signals">Undecoded signals <span id="nsig" class="mute"></span></button>
   <button data-tab="coverage">Coverage</button>
   <button data-tab="log">Log</button>
+  <button data-tab="settings">Settings</button>
 </nav>
 <main>
   <section id="tab-devices" class="panel">
@@ -111,6 +125,16 @@
   </section>
 
   <section id="tab-log" class="panel" hidden><div id="log" class="log"></div></section>
+
+  <section id="tab-settings" class="panel" hidden>
+    <p class="mute" id="sback"></p>
+    <div id="sform"></div>
+    <div class="savebar">
+      <button id="ssave" class="primary" disabled>Save</button>
+      <button id="sreset" disabled>Discard changes</button>
+      <span id="smsg" class="mute"></span>
+    </div>
+  </section>
 </main>
 
 <script>
@@ -232,10 +256,68 @@ async function refresh() {
   } catch (e) { $("#nowtxt").textContent = "connection error: " + e; }
 }
 
+// ---------------------------------------------------------------- settings tab
+let SET = null, SDIRTY = {};
+function sInput(s) {
+  const id = "set-" + s.key, v = s.value ?? "";
+  if (s.type === "bool") return `<label><input type=checkbox id="${id}" data-skey="${s.key}" ${v ? "checked" : ""}> enabled</label>`;
+  if (s.type === "choice") return `<select id="${id}" data-skey="${s.key}">${s.choices.map(c => `<option ${c === v ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`;
+  const t = s.type === "password" ? "password" : (s.type === "int" || s.type === "float") ? "number" : "text";
+  const extra = t === "number" ? `${s.min != null ? `min="${s.min}"` : ""} ${s.max != null ? `max="${s.max}"` : ""} step="${s.type === "int" ? 1 : "any"}"` : "";
+  return `<input type=${t} id="${id}" data-skey="${s.key}" value="${esc(v)}" ${extra} placeholder="${s.type === "windows" ? "HH:MM-HH:MM, …" : ""}">`;
+}
+function renderSettings() {
+  if (!SET) return;
+  $("#sback").textContent = SET.backend === "supervisor"
+    ? "Changes are saved to the add-on configuration (same as Settings → Add-ons → RTL-SDR Survey → Configuration)."
+    : "Standalone mode: changes are saved to /data/settings_override.json and override environment variables.";
+  const groups = [...new Set(SET.settings.map(s => s.group))];
+  $("#sform").innerHTML = groups.map(g => `<div class=sgroup><h3>${esc(g)}</h3>` +
+    SET.settings.filter(s => s.group === g).map(s => `<div class=srow id="row-${s.key}">
+      <div><b>${esc(s.label)}</b>${s.live ? "" : `<span class="badge rs">restart</span>`}<div class=mute><code>${esc(s.key)}</code></div></div>
+      <div>${sInput(s)}</div>
+      <div class=mute>${esc(s.help || "")}${s.hint ? `<div><i>${esc(s.hint)}</i></div>` : ""}<div class=msg-bad id="err-${s.key}"></div></div>
+    </div>`).join("") + `</div>`).join("");
+  SDIRTY = {}; sUpdateBar();
+}
+function sValue(el) { return el.type === "checkbox" ? el.checked : el.value; }
+function sUpdateBar() {
+  const n = Object.keys(SDIRTY).length;
+  $("#ssave").disabled = !n; $("#sreset").disabled = !n;
+  const rs = Object.keys(SDIRTY).some(k => !SET.settings.find(s => s.key === k).live);
+  $("#ssave").textContent = n ? `Save ${n} change${n > 1 ? "s" : ""}${rs ? " & restart" : ""}` : "Save";
+}
+async function loadSettings() { SET = await api("api/settings"); renderSettings(); }
+document.addEventListener("input", e => {
+  const k = e.target.dataset && e.target.dataset.skey; if (!k) return;
+  const s = SET.settings.find(x => x.key === k), v = sValue(e.target);
+  if (String(v) === String(s.value ?? "")) delete SDIRTY[k]; else SDIRTY[k] = v;
+  $("#row-" + k).classList.toggle("dirty", k in SDIRTY);
+  $("#row-" + k).classList.remove("bad"); $("#err-" + k).textContent = "";
+  $("#smsg").textContent = ""; sUpdateBar();
+});
+$("#sreset").onclick = renderSettings;
+$("#ssave").onclick = async () => {
+  $("#ssave").disabled = true; $("#smsg").className = "mute"; $("#smsg").textContent = "Saving…";
+  const r = await fetch("api/settings", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({changes: SDIRTY})});
+  const d = await r.json().catch(() => ({ok:false, errors:{_: r.statusText}}));
+  if (!d.ok) {
+    $("#smsg").className = "msg-bad";
+    $("#smsg").textContent = d.errors._ || "Fix the highlighted settings.";
+    for (const [k, m] of Object.entries(d.errors || {})) if (k !== "_" && $("#row-" + k)) { $("#row-" + k).classList.add("bad"); $("#err-" + k).textContent = m; }
+    $("#ssave").disabled = false; return;
+  }
+  $("#smsg").className = "msg-ok";
+  $("#smsg").textContent = d.changed.length ? (d.restart ? "Saved. Restarting the add-on… this page will reconnect in a few seconds." : "Saved and applied.") : "Nothing changed.";
+  if (d.restart) setTimeout(() => location.reload(), 12000); else { await loadSettings(); refresh(); }
+};
+
 document.addEventListener("click", async e => {
   const t = e.target;
   if (t.dataset.tab) { tab = t.dataset.tab; document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b===t));
-    document.querySelectorAll("main section").forEach(s => s.hidden = s.id !== "tab-" + tab); refresh(); return; }
+    document.querySelectorAll("main section").forEach(s => s.hidden = s.id !== "tab-" + tab);
+    if (tab === "settings" && !Object.keys(SDIRTY).length) loadSettings();
+    refresh(); return; }
   if (t.dataset.k) { sortDir = sortK === t.dataset.k ? -sortDir : -1; sortK = t.dataset.k; renderDevices(); return; }
   if (t.dataset.approve) { await post("api/devices/" + t.dataset.approve, {approved: t.checked ? 1 : 0}); refresh(); return; }
   if (t.dataset.save) { await post("api/devices/" + t.dataset.save, {name: $("#nm-" + t.dataset.save).value.trim()}); refresh(); return; }

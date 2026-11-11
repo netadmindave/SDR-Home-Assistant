@@ -1,6 +1,7 @@
 """Time-slices one RTL-SDR between rtl_433 (decoding) and rtl_power (energy sweeps)."""
 import asyncio
 import collections
+import re
 import random
 import json
 import logging
@@ -67,6 +68,32 @@ class Scanner:
         self.db.set_setting("mode", mode)
         self.note(f"Mode set to {mode}")
         self.skip()
+
+    def apply_settings(self, changes):
+        """Apply saved settings without a restart (everything except MQTT/topic/log changes)."""
+        from config import DEFAULTS, load_plan
+        for k, v in changes.items():
+            self.o[k] = DEFAULTS.get(k) if v is None else v
+        if "survey_schedule" in changes:
+            self.survey_windows = rs.parse_windows(self.o.get("survey_schedule") or "")
+        if "radiosonde_windows_utc" in changes:
+            self.rs_windows = rs.parse_windows(self.o.get("radiosonde_windows_utc") or "")
+        if {"decode_dwell_s", "sweep_dwell_s"} & set(changes):
+            self.plan = load_plan(self.o)
+        if "daytime_survey_min_per_hour" in changes:
+            self._next_day_survey = self._schedule_day_survey(time.time())
+        if "mode" in changes:
+            self.db.set_setting("mode_option", self.o["mode"])
+            self.mode = self.o["mode"]
+            self.db.set_setting("mode", self.mode)
+        if {"stale_after_min", "radiosonde_publish_ha", "radiosonde_enabled"} & set(changes):
+            self.mqtt._announced = {}
+            for d in self.db.approved():
+                self.mqtt.announce(d)
+            if self.o.get("radiosonde_enabled") and self.o.get("radiosonde_publish_ha"):
+                self.mqtt.announce_radiosonde()
+        self.note("Settings applied: " + ", ".join(sorted(changes)))
+        self.skip()   # restart the current slot with the new settings
 
     def skip(self):
         if self.current and self.current.get("decoder") == "auto_rx":
@@ -307,7 +334,7 @@ class Scanner:
                 continue
             i = self._pos["survey"] % len(order)
             self._pos["survey"] = i + 1
-            await self.run_slot(self._cap_dwell(order[i]))
+            await self.run_slot(self._cap_dwell(dict(order[i], survey=True)))
             await asyncio.sleep(1.0)  # give USB a moment to release
 
     async def _maybe_day_survey(self):
@@ -320,7 +347,8 @@ class Scanner:
         if so:
             pick = random.choice(so)
             self.note(f"Daytime survey: {pick['name']} for up to {mins} min")
-            await self.run_slot(self._cap_dwell(dict(pick, dwell=min(pick["dwell"], mins * 60))))
+            await self.run_slot(self._cap_dwell(dict(pick, survey=True,
+                                                     dwell=min(pick["dwell"], mins * 60))))
         # next one at a random time in the following hour (never two back-to-back)
         self._next_day_survey = self._schedule_day_survey(
             max(time.time(), hour_start - (hour_start % 3600) + 3600))
@@ -432,6 +460,8 @@ class Scanner:
             cmd += ["-g", self._gain()]
         if int(self.o.get("ppm") or 0):
             cmd += ["-p", str(self.o["ppm"])]
+        if slot.get("survey") and self.o.get("survey_all_decoders"):
+            cmd += await self._all_decoder_args()
         if self.o.get("rtl_433_extra_args"):
             cmd += shlex.split(self.o["rtl_433_extra_args"])
         p = await self._spawn(cmd)
@@ -459,6 +489,20 @@ class Scanner:
         t = asyncio.create_task(reader())
         rc = await self._wait(p, t, self.ends + 10)
         return self._early_exit_error(p, "rtl_433", rc)
+
+    async def _all_decoder_args(self):
+        """-R for every protocol rtl_433 lists (default-on and off-by-default, not hidden).
+        Asked from the binary itself so it always matches the build."""
+        if getattr(self, "_all_r", None) is None:
+            p = await asyncio.create_subprocess_exec(
+                _bin("rtl_433"), "-R", "help",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            out, _ = await p.communicate()
+            nums = re.findall(r"^\s+\[(\d+)\]", out.decode(errors="replace"), re.M)
+            self._all_r = [a for n in nums for a in ("-R", str(int(n)))]
+            off = len(re.findall(r"^\s+\[\d+\]\*", out.decode(errors="replace"), re.M))
+            self.note(f"Survey decoders: all {len(nums)} enabled ({off} normally off)")
+        return self._all_r
 
     def handle_rtl433(self, slot, ev):
         key, model, dev_id, channel = rtl433_identity(ev)
