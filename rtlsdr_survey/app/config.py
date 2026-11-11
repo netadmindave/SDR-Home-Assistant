@@ -36,6 +36,17 @@ DEFAULTS = {
     "publish_raw": True,
     "rtl_433_extra_args": "",
     "survey_all_decoders": False,       # survey slots also enable rtl_433's off-by-default decoders
+    # frequency checklist (Frequencies tab); None = catalog defaults
+    "frequencies": None,
+    "custom_frequencies": [],
+    # receivers: [] = the single `device` above; else [{name, device, role, gain?, ppm?}, ...]
+    "sdrs": [],
+    "assignments": [],                  # "<frequency id>=<sdr name>" (Frequencies tab)
+    # optional tools
+    "enable_aprs": False,
+    "enable_noaa": False,
+    "enable_adsb": False,
+    "enable_ais": False,
     "log_level": "info",
     "web_port": 8099,
     # radiosonde_auto_rx
@@ -56,6 +67,11 @@ ENV_PREFIX = "RTLSDR_"
 
 
 def _coerce(default, value):
+    if isinstance(default, list) or default is None:
+        try:
+            return json.loads(value)
+        except ValueError:
+            return [v.strip() for v in str(value).split(";") if v.strip()]
     if isinstance(default, bool):
         return str(value).lower() in ("1", "true", "yes", "on")
     if isinstance(default, int):
@@ -177,47 +193,8 @@ def parse_freq(v) -> int:
 
 
 def load_plan(opts: dict) -> dict:
-    target = config_dir() / "survey_plan.yaml"
-    default = Path(__file__).with_name("default_plan.yaml")
-    if not target.exists():
-        try:
-            shutil.copy(default, target)
-            log.info("Wrote default survey plan to %s", target)
-        except OSError as e:
-            log.warning("Could not write %s: %s", target, e)
-    src = target if target.exists() else default
-    raw = yaml.safe_load(src.read_text()) or {}
-
-    slots = []
-    for d in raw.get("decode") or []:
-        if not d.get("enabled", True):
-            continue
-        if d.get("decoder", "rtl_433") != "rtl_433":
-            log.warning("Skipping slot %r: unsupported decoder %r", d.get("name"), d.get("decoder"))
-            continue
-        w = float(d.get("weight", 1))
-        slots.append({
-            "name": d["name"],
-            "kind": "decode",
-            "decoder": d.get("decoder", "rtl_433"),
-            "freq": parse_freq(d["freq"]),
-            "sample_rate": parse_freq(d.get("sample_rate", "250k")),
-            "msgtype": d.get("msgtype", "all"),
-            "dwell": int(d.get("dwell", opts["decode_dwell_s"] * w)),
-        })
-    for s in raw.get("sweep") or []:
-        if not s.get("enabled", True):
-            continue
-        lo, hi, step = s["range"].split(":")
-        slots.append({
-            "name": s["name"],
-            "kind": "sweep",
-            "decoder": "rtl_power",
-            "low": parse_freq(lo),
-            "high": parse_freq(hi),
-            "step": parse_freq(step),
-            "range": s["range"],
-            "dwell": int(s.get("dwell", opts["sweep_dwell_s"])),
-        })
-    log.info("Plan loaded from %s: %d slots", src, len(slots))
-    return {"slots": slots, "source": str(src)}
+    """Survey slots now come from the Frequencies tab (catalog.py)."""
+    from catalog import build_slots
+    plan = build_slots(opts)
+    log.info("Plan: %d slots from the frequency checklist", len(plan["slots"]))
+    return plan

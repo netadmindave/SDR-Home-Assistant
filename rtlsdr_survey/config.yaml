@@ -1,5 +1,5 @@
 name: RTL-SDR Survey
-version: "0.5.1"
+version: "0.6.0"
 slug: rtlsdr_survey
 description: >-
   One RTL-SDR, time-sliced between rtl_433 decoding, rtl_power sweeps and
@@ -44,6 +44,38 @@ options:
   peak_threshold_db: 10
   publish_raw: true
   survey_all_decoders: false
+  frequencies:
+    - r433_43392
+    - r433_315
+    - r433_345
+    - r433_310
+    - r433_318
+    - r433_303
+    - r433_390
+    - r433_915
+    - r433_27
+    - sw_27
+    - sw_40
+    - sw_49
+    - sw_72
+    - sw_mursl
+    - sw_mursh
+    - sw_300
+    - sw_340
+    - sw_385
+    - sw_425
+    - sw_frs
+    - sw_902
+    - aprs_14439
+    - adsb_1090
+    - ais_162
+  custom_frequencies: []
+  sdrs: []
+  assignments: []
+  enable_aprs: false
+  enable_noaa: false
+  enable_adsb: false
+  enable_ais: false
   base_topic: rtlsdr
   discovery_prefix: homeassistant
   log_level: info
@@ -79,6 +111,22 @@ schema:
   mqtt_password: password?
   rtl_433_extra_args: str?
   survey_all_decoders: bool
+  frequencies:
+    - str
+  custom_frequencies:
+    - str
+  sdrs:
+    - name: str
+      device: str
+      role: list(rotating|dedicated)
+      gain: str?
+      ppm: int?
+  assignments:
+    - str
+  enable_aprs: bool
+  enable_noaa: bool
+  enable_adsb: bool
+  enable_ais: bool
   radiosonde_enabled: bool
   radiosonde_windows_utc: str
   radiosonde_min_mhz: float(400,406)

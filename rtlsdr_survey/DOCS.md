@@ -1,14 +1,13 @@
 # RTL-SDR Survey (Home Assistant add-on / Docker)
 
-One RTL-SDR dongle, time-sliced between three tools:
+One RTL-SDR dongle, time-sliced between these tools (the optional ones are off until you enable them on the **Frequencies** tab):
 
-| Tool | What it does here |
-|---|---|
-| **rtl_433** | Decodes ISM/Part 15 sensors: weather, temp/humidity, TPMS, door/window, remotes, 915 MHz sensors |
-| **rtl_power** | Peak-hold energy sweeps of the unlicensed bands, to find transmitters nothing decoded |
-| **radiosonde_auto_rx** | Tracks NWS weather balloons (400–406 MHz) during the twice-daily launch windows |
+- **rtl_433** (development branch, ~390 decoders) decodes 300–928 MHz sensors: weather, temp/humidity, TPMS, door/window, remotes.
+- **rtl_power** runs peak-hold sweeps of the unlicensed bands to find transmitters nothing decoded.
+- **radiosonde_auto_rx** tracks NWS weather balloons during the twice-daily launch windows.
+- *Optional:* **Direwolf** (APRS), **rtl_fm + multimon-ng** (NOAA weather radio SAME alerts), **readsb** (ADS-B aircraft), **rtl_ais** (marine AIS).
 
-**Survey mode** cycles through every slot in `survey_plan.yaml` indefinitely, for days if you like. It builds an inventory of every device it hears: what type it is, which slot heard it, how often, SNR, and the latest raw and parsed output. Nothing goes to Home Assistant until you tick **In HA** for a device. Then it publishes MQTT discovery, and the device shows up with proper sensor entities.
+**Survey mode** cycles through every frequency ticked on the **Frequencies** tab indefinitely, for days if you like. It builds an inventory of every device it hears: what type it is, which slot heard it, how often, SNR, and the latest raw and parsed output. Nothing goes to Home Assistant until you tick **In HA** for a device. Then it publishes MQTT discovery, and the device shows up with proper sensor entities.
 
 **Monitor mode** watches only the devices you approved. The dongle parks on a **home frequency**: the one with the most event-driven devices (door/window sensors, motion, remotes, doorbells), since those only transmit when something happens. It leaves home only when devices on another frequency haven't reported for `monitor_refresh_min`. That visit ends as soon as they have all reported, or after `monitor_dwell_s` at most.
 
@@ -19,6 +18,51 @@ One RTL-SDR dongle, time-sliced between three tools:
 **Stale devices:** timer-reporting devices (temperature, weather, TPMS...) get HA's `expire_after`, so their entities go *unavailable* after `stale_after_min` (120) without a report. Event devices are exempt, because silence is normal for them.
 
 Event-driven devices on a frequency other than home are only heard while the dongle visits it. If you have door sensors on two different frequencies, a second dongle is the real fix.
+
+## Several dongles
+
+With one dongle you don't need to configure anything. For two or more, open **Settings → Receivers (SDRs)** and add a row per dongle. **Detect dongles** lists what's plugged in. Each row has:
+
+- **Name:** used in the UI, the log and the MQTT topic `rtlsdr/scanner/<name>`.
+- **Device:** index (`0`, `1`…) or, better, serial number. Set unique serials with `rtl_eeprom -d <index> -s <serial>` so dongles keep their jobs after a reboot or replug.
+- **Role:**
+  - **rotating:** shares the scan with the other rotating dongles. Survey, monitor and auto modes apply. Frequencies nobody else claims are split between rotating dongles, balanced by listening time.
+  - **dedicated:** runs only the frequencies assigned to it, ignoring modes. One frequency means it stays parked there full time; several means it rotates among just those.
+- **Gain / PPM:** optional per-dongle overrides.
+
+Then on the **Frequencies** tab each frequency (and each custom line) has a dongle dropdown. Leave it on *any rotating* to share it, or pick a dongle. Radiosondes run during launch windows on the first rotating dongle, unless you assign them to one. Assigned to a dedicated dongle, auto_rx runs full time and the other dongles never pause.
+
+Example with three dongles:
+
+| Dongle | Role | Assigned | Result |
+|---|---|---|---|
+| `main` | rotating | (nothing) | Surveys/monitors everything else and handles the radiosonde windows |
+| `door` | dedicated | 433.92 MHz | Door sensors and remotes heard instantly, never missed |
+| `wx` | dedicated | NOAA 162.475 | Every weather alert, 24/7 |
+
+Changing the receiver list restarts the add-on. Changing assignments applies immediately.
+
+## Frequencies tab
+
+A checklist of every frequency and band the bundled tools support, grouped by tool. Each optional tool has an **enabled** switch, and its frequencies are skipped while it's off. Under the list is a box for your own frequencies, one per line:
+
+```
+418.5M rtl_433 Gate remote
+162.475M noaa
+144.39M aprs
+418M:420M:10k sweep
+```
+
+Saving applies immediately, with no restart. The selection is stored in the `frequencies` / `custom_frequencies` options.
+
+What each optional tool adds:
+
+| Tool | Frequencies | In Home Assistant |
+|---|---|---|
+| **Direwolf APRS** | 144.390 (NA), 144.800 (EU), 145.825 (ISS) | Each station is a device you can approve; weather stations give temperature, humidity, wind, rain and pressure |
+| **NOAA SAME alerts** | 162.400–162.550 (pick your local transmitter) | A fixed **NOAA weather alerts** device: *Alert active*, last alert, event code, areas, issued/expires. Alerts only arrive while the dongle is on that channel, so use a second dongle if you rely on it. |
+| **readsb ADS-B** | 1090 MHz | A fixed **ADS-B receiver** device: aircraft seen, with position, max range, nearest. Aircraft are listed on the Devices tab. |
+| **rtl_ais AIS** | 161.975 + 162.025 MHz | A fixed **AIS receiver** device: ships seen, max range, nearest |
 
 ## Radiosondes
 
@@ -45,7 +89,6 @@ With the default plan, one full cycle is about **73 minutes**. 433.92 MHz gets a
 
 Stop the rtl_433 and rtlamr2mqtt add-ons first. Only one process can own the dongle.
 
-The plan file is written to the add-on's config folder (`/addon_configs/<repo-id>_rtlsdr_survey/survey_plan.yaml`) on first start. Edit it there and restart.
 
 ## Run as a plain container
 
@@ -86,6 +129,10 @@ Every option below is also in the web UI's **Settings** tab. Saving there writes
 | `sweep_integration_s` | 5 | rtl_power integration interval (peak hold is on) |
 | `peak_threshold_db` | 10 | dB above the per-hop median to count as a signal |
 | `publish_raw` | true | Publish every decode (approved or not) to `rtlsdr/survey/<uid>` |
+| `frequencies` / `custom_frequencies` | defaults | Edited on the Frequencies tab |
+| `sdrs` | (empty = one dongle, `device`) | Receivers list: name, device, role (rotating/dedicated), optional gain/ppm. Edited on Settings → Receivers |
+| `assignments` | (empty) | `<frequency id>=<receiver name>`. Edited on the Frequencies tab |
+| `enable_aprs` / `enable_noaa` / `enable_adsb` / `enable_ais` | false | Optional tools |
 | `survey_all_decoders` | false | Survey slots also enable rtl_433's ~50 off-by-default decoders |
 | `rtl_433_extra_args` | | e.g. `-R -59` to disable a noisy decoder, or `-Y minmax` |
 | `radiosonde_enabled` | true | Hand the dongle to auto_rx during launch windows |
@@ -100,15 +147,16 @@ Every option below is also in the web UI's **Settings** tab. Saving there writes
 | Topic | Content |
 |---|---|
 | `rtlsdr/status` | `online` / `offline` (LWT, also used as entity availability) |
-| `rtlsdr/scanner` | Current slot (retained) |
+| `rtlsdr/scanner` (one dongle) or `rtlsdr/scanner/<name>` (several) | Current slot per dongle (retained) |
 | `rtlsdr/survey/<uid>` | Every decoded event while `publish_raw` is on |
 | `rtlsdr/devices/<uid>/state` | Flattened state of **approved** devices (retained) |
 | `rtlsdr/radiosonde/state`, `.../position` | Latest sonde telemetry and GPS position (retained) |
+| `rtlsdr/noaa/state`, `rtlsdr/adsb/state`, `rtlsdr/ais/state` | Fixed receiver devices for the optional tools (retained) |
 | `homeassistant/<component>/rtlsdr_<uid>/<field>/config` | Discovery for approved devices. Un-ticking a device removes it. |
 
 ## Limits
 
 - **Sonde windows pause the survey** for about 5½ h a day. Shorten `radiosonde_windows_utc`, or disable it, if you want more survey time.
-- **One dongle hears about 2.4 MHz at a time.** Anything transmitting while the dongle is elsewhere is missed. Monitor mode with a single slot avoids that. A second dongle is the real fix (e.g. one parked on 433.92, one on 915).
+- **Each dongle hears about 2.4 MHz at a time.** Anything transmitting while the dongle is elsewhere is missed. Monitor mode with a single slot avoids that. A second dongle is the real fix (e.g. one parked on 433.92, one on 915).
 - **Device IDs.** Many cheap sensors pick a new random ID after a battery change, so it shows up as a new device. Approve the new one and forget the old one.
 - **Undecoded signals** are energy only. The tool can tell you *something* bursts at 418.000 MHz 3% of the time, but not what it is. Use `rtl_433 -A` or Universal Radio Hacker on that frequency to dig in.

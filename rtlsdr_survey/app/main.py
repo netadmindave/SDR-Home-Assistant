@@ -5,10 +5,10 @@ import signal
 
 from aiohttp import web
 
-from config import data_dir, load_options, load_plan
+from config import data_dir, load_options
 from db import DB
 from mqtt_out import MQTTOut
-from scanner import Scanner
+from manager import Manager
 from web import build_app
 
 
@@ -21,10 +21,9 @@ async def main():
     safe = {k: ("***" if "password" in k and v else v) for k, v in opts.items() if k != "_user"}
     log.info("Options: %s", safe)
 
-    plan = load_plan(opts)
     db = DB(str(data_dir() / "survey.db"))
     mqtt = MQTTOut(opts, db)
-    scanner = Scanner(opts, plan, db, mqtt)
+    scanner = Manager(opts, db, mqtt)   # one Scanner per SDR inside
 
     runner = web.AppRunner(build_app(scanner, db, mqtt), access_log=None)
     await runner.setup()
@@ -39,7 +38,7 @@ async def main():
     except asyncio.CancelledError:
         log.info("Stopping")
     finally:
-        await scanner._kill_all()
+        await scanner.stop()
         mqtt.pub(f"{mqtt.base}/status", "offline", retain=True)
         await runner.cleanup()
 

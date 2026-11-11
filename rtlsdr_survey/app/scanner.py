@@ -1,4 +1,5 @@
-"""Time-slices one RTL-SDR between rtl_433 (decoding) and rtl_power (energy sweeps)."""
+"""Drives one RTL-SDR: time-slices it between rtl_433, rtl_power, rtl_fm pipelines, readsb,
+rtl_ais and radiosonde_auto_rx. manager.py runs one of these per dongle."""
 import asyncio
 import collections
 import re
@@ -10,10 +11,12 @@ import shlex
 import signal
 import statistics
 import time
+from pathlib import Path
 
 import datetime as dt
 
 import radiosonde as rs
+import tools
 from classify import classify_rtl433, is_event_device, rtl433_identity, rtl433_state, uid_for
 from config import data_dir
 
@@ -27,87 +30,57 @@ def _bin(name):
 
 
 class Scanner:
-    def __init__(self, opts, plan, db, mqtt):
-        self.o = opts
-        self.plan = plan
-        self.db = db
-        self.mqtt = mqtt
+    """Drives ONE dongle. A Manager (manager.py) owns one Scanner per configured SDR and shares
+    the options, database, MQTT client, mode and log between them."""
+
+    def __init__(self, mgr, sdr):
+        self.mgr = mgr
+        self.sdr = sdr
+        self.name = sdr["name"]
+        self.role = sdr.get("role", "rotating")     # rotating | dedicated
+        over = {k: sdr[k] for k in ("device", "gain", "ppm") if sdr.get(k) not in (None, "")}
+        self.o = collections.ChainMap(over, mgr.o)  # per-dongle radio settings over shared options
+        self.plan = {"slots": [], "source": "Frequencies tab"}
+        self.db = mgr.db
+        self.mqtt = mgr.mqtt
+        self.ring = mgr.ring
+        self.rs_host = False        # handles radiosonde windows (rotating) / runs auto_rx (dedicated)
         self.current = None
         self.started = None
         self.ends = None
         self.cur_events = 0
-        self.ring = collections.deque(maxlen=400)
         self._skip = asyncio.Event()
         self._procs = []
         self._pos = {"survey": 0, "monitor": 0}
         self._next_day_survey = self._schedule_day_survey(time.time())
-        # The UI toggle persists across restarts, unless the add-on option itself was changed.
-        if db.get_setting("mode_option") != opts["mode"]:
-            db.set_setting("mode_option", opts["mode"])
-            db.set_setting("mode", opts["mode"])
-        self.mode = db.get_setting("mode", opts["mode"])
-        self.rs_windows = rs.parse_windows(opts.get("radiosonde_windows_utc", ""))
-        self.rs_force_until = 0.0
-        self.survey_windows = rs.parse_windows(opts.get("survey_schedule", ""))
         self._pending = None
-        fs = db.get_setting("first_start")
-        if not fs:
-            fs = str(time.time())
-            db.set_setting("first_start", fs)
-        self.first_start = float(fs)
+
+    # shared state lives on the manager
+    mode = property(lambda self: self.mgr.mode)
+    rs_windows = property(lambda self: self.mgr.rs_windows)
+    survey_windows = property(lambda self: self.mgr.survey_windows)
+    first_start = property(lambda self: self.mgr.first_start)
+
+    @property
+    def rs_force_until(self):
+        return self.mgr.rs_force_until
+
+    @rs_force_until.setter
+    def rs_force_until(self, v):
+        self.mgr.rs_force_until = v
 
     # ------------------------------------------------------------- helpers
     def note(self, msg, level=logging.INFO):
-        log.log(level, msg)
-        self.ring.append({"t": time.time(), "msg": msg, "lvl": logging.getLevelName(level)})
-
-    def set_mode(self, mode):
-        if mode not in ("survey", "monitor", "auto"):
-            raise ValueError(mode)
-        self.mode = mode
-        self.db.set_setting("mode", mode)
-        self.note(f"Mode set to {mode}")
-        self.skip()
-
-    def apply_settings(self, changes):
-        """Apply saved settings without a restart (everything except MQTT/topic/log changes)."""
-        from config import DEFAULTS, load_plan
-        for k, v in changes.items():
-            self.o[k] = DEFAULTS.get(k) if v is None else v
-        if "survey_schedule" in changes:
-            self.survey_windows = rs.parse_windows(self.o.get("survey_schedule") or "")
-        if "radiosonde_windows_utc" in changes:
-            self.rs_windows = rs.parse_windows(self.o.get("radiosonde_windows_utc") or "")
-        if {"decode_dwell_s", "sweep_dwell_s"} & set(changes):
-            self.plan = load_plan(self.o)
-        if "daytime_survey_min_per_hour" in changes:
-            self._next_day_survey = self._schedule_day_survey(time.time())
-        if "mode" in changes:
-            self.db.set_setting("mode_option", self.o["mode"])
-            self.mode = self.o["mode"]
-            self.db.set_setting("mode", self.mode)
-        if {"stale_after_min", "radiosonde_publish_ha", "radiosonde_enabled"} & set(changes):
-            self.mqtt._announced = {}
-            for d in self.db.approved():
-                self.mqtt.announce(d)
-            if self.o.get("radiosonde_enabled") and self.o.get("radiosonde_publish_ha"):
-                self.mqtt.announce_radiosonde()
-        self.note("Settings applied: " + ", ".join(sorted(changes)))
-        self.skip()   # restart the current slot with the new settings
+        self.mgr.note(msg, level, sdr=self.name)
 
     def skip(self):
         if self.current and self.current.get("decoder") == "auto_rx":
             self.rs_force_until = 0.0
         self._skip.set()
 
-    def force_radiosonde(self, minutes):
-        self.rs_force_until = time.time() + 60 * float(minutes)
-        self.note(f"Radiosonde tracking forced for {minutes} min")
-        self._skip.set()
-
     def radiosonde_due(self):
         """Return the UTC timestamp the radiosonde slot should run until, or None."""
-        if not self.o.get("radiosonde_enabled"):
+        if not self.o.get("radiosonde_enabled") or not self.rs_host:
             return None
         if self.rs_force_until > time.time():
             return self.rs_force_until
@@ -224,7 +197,7 @@ class Scanner:
         """Don't run past the next radiosonde window or the next auto-mode switch."""
         now = time.time()
         limits = []
-        if self.o.get("radiosonde_enabled"):
+        if self.o.get("radiosonde_enabled") and self.rs_host:
             nxt = rs.next_window_start(self.rs_windows)
             if nxt:
                 limits.append(nxt.timestamp() - now)
@@ -262,8 +235,10 @@ class Scanner:
                 for k, v in sorted(by_slot.items())]}
         init_until = self._initial_survey_until()
         return {
+            "sdr": self.name, "device": str(self.o["device"]), "role": self.role,
+            "rs_host": self.rs_host,
             "mode": self.mode,
-            "effective_mode": eff,
+            "effective_mode": eff if self.role == "rotating" else "dedicated",
             "survey_schedule": self.o.get("survey_schedule") or None,
             "initial_survey_until": init_until if init_until > now else None,
             "next_day_survey": (self._next_day_survey if self.mode == "auto"
@@ -297,7 +272,11 @@ class Scanner:
 
     # ------------------------------------------------------------- main loop
     async def run(self):
-        self.note(f"Scanner starting in {self.mode} mode, device {self.o['device']}")
+        self.note(f"Starting: device {self.o['device']}, {self.role}, "
+                  f"{len(self.plan['slots'])} slot(s)" + (", radiosonde host" if self.rs_host else ""))
+        if self.role == "dedicated":
+            await self._run_dedicated()
+            return
         last_eff = None
         while True:
             until = self.radiosonde_due()
@@ -337,6 +316,31 @@ class Scanner:
             await self.run_slot(self._cap_dwell(dict(order[i], survey=True)))
             await asyncio.sleep(1.0)  # give USB a moment to release
 
+    async def _run_dedicated(self):
+        """Dedicated dongle: only its assigned frequencies, ignoring survey/monitor modes.
+        One frequency = parked on it; several = rotate among just those."""
+        i = 0
+        while True:
+            if self.rs_host and self.o.get("radiosonde_enabled"):
+                await self.run_slot(self.radiosonde_slot(time.time() + 3600))
+                await asyncio.sleep(1.0)
+                continue
+            slots = self.plan["slots"]
+            if not slots:
+                self.current = None
+                self.note("Dedicated dongle has no frequencies assigned: idle. Assign some on "
+                          "the Frequencies tab.", logging.WARNING)
+                try:
+                    await asyncio.wait_for(self._skip.wait(), 60)
+                except asyncio.TimeoutError:
+                    pass
+                self._skip.clear()
+                continue
+            slot = slots[i % len(slots)]
+            i += 1
+            await self.run_slot(dict(slot, dwell=3600) if len(slots) == 1 else slot)
+            await asyncio.sleep(1.0)
+
     async def _maybe_day_survey(self):
         """Auto mode only: once per hour, at a random time, survey one random slot briefly."""
         mins = int(self.o.get("daytime_survey_min_per_hour") or 0)
@@ -358,14 +362,20 @@ class Scanner:
         self._pending = set(pending) if pending else None
         self.ends = self.started + slot["dwell"]
         self._skip.clear()
-        self.mqtt.status({"mode": self.mode, "effective_mode": self.effective_mode(),
+        self.mqtt.status({"sdr": self.name, "mode": self.mode, "effective_mode": self.effective_mode(),
                           "slot": slot["name"], "decoder": slot["decoder"],
-                          "since": int(self.started)})
+                          "since": int(self.started)}, sdr=self.name if len(self.mgr.scanners) > 1 else None)
         err = None
         stats = {"frames": 0, "frames_decoded": 0}
         try:
             if slot["decoder"] == "rtl_433":
                 err = await self._run_rtl433(slot, stats)
+            elif slot["decoder"] in ("noaa", "aprs"):
+                err = await self._run_fm_pipeline(slot)
+            elif slot["decoder"] == "adsb":
+                err = await self._run_adsb(slot)
+            elif slot["decoder"] == "ais":
+                err = await self._run_ais(slot)
             elif slot["decoder"] == "auto_rx":
                 err = await self._run_autorx(slot)
             elif slot["decoder"] == "rtl_power":
@@ -546,6 +556,178 @@ class Scanner:
                     serial, "", "Radiosonde (weather balloon)",
                     st.get("frequency_mhz"), None, st.get("snr"), st, pkt)
         self.mqtt.radiosonde_state(st)
+
+    # ------------------------------------------------------------- rtl_fm pipelines
+    def _rtl_fm(self, slot, rate):
+        cmd = [_bin("rtl_fm"), *self._dev_args("rtl_fm"), "-f", str(slot["freq"]), "-M", "fm",
+               "-s", str(rate), "-E", "dc"]
+        if self._gain():
+            cmd += ["-g", self._gain()]
+        if int(self.o.get("ppm") or 0):
+            cmd += ["-p", str(self.o["ppm"])]
+        return cmd + ["-"]
+
+    async def _run_fm_pipeline(self, slot):
+        """rtl_fm | multimon-ng (NOAA SAME) or rtl_fm | direwolf (APRS)."""
+        dec = slot["decoder"]
+        if dec == "aprs":
+            conf = data_dir() / "direwolf.conf"
+            conf.write_text("ADEVICE null null\nCHANNEL 0\nMYCALL N0CALL\nMODEM 1200\n"
+                            "AGWPORT 0\nKISSPORT 0\n")
+            rate = 24000
+            tool = [_bin("direwolf"), "-c", str(conf), "-r", str(rate), "-D", "1", "-t", "0",
+                    "-q", "hd", "-"]
+        else:
+            rate = 22050
+            tool = [_bin("multimon-ng"), "-t", "raw", "-q", "-a", "EAS", "-"]
+        shell = (" ".join(shlex.quote(c) for c in self._rtl_fm(slot, rate)) + " 2>/dev/null | "
+                 + " ".join(shlex.quote(c) for c in tool))
+        p = await self._spawn(["sh", "-c", shell])
+        asyncio.create_task(self._drain_stderr(p, dec))
+
+        async def reader():
+            async for raw in p.stdout:
+                line = raw.decode(errors="replace").rstrip()
+                if line:
+                    self._handle_tool_line(slot, line)
+
+        t = asyncio.create_task(reader())
+        rc = await self._wait(p, t, self.ends)
+        return self._early_exit_error(p, dec, rc)
+
+    def _handle_tool_line(self, slot, line):
+        dec, freq = slot["decoder"], slot["freq"] / 1e6
+        if dec == "noaa":
+            alert = tools.parse_same(line)
+            if alert:
+                self.note(f"NOAA {freq:.3f} MHz: {alert['event']} ({alert['sender']}) "
+                          f"for {alert['locations']}, {alert['duration_min']} min")
+                st = dict(alert, frequency_mhz=freq)
+                self._store(slot, "noaa", f"noaa:{freq:.3f}", f"NOAA WX {freq:.3f} MHz",
+                            f"{freq:.3f}", "", "NOAA weather radio alerts", freq, None, None, st,
+                            {"line": line})
+                self._noaa_publish(st)
+        elif dec == "aprs":
+            r = tools.parse_aprs(line)
+            if r:
+                key, model, dev_id, category, st = r
+                self._store(slot, "aprs", key, model, dev_id, "", category, freq, None, None, st,
+                            {"line": line})
+
+    def _noaa_publish(self, alert):
+        active = (not alert.get("is_test")
+                  and dt.datetime.fromisoformat(alert["expires"]) > dt.datetime.now(dt.timezone.utc))
+        st = dict(alert, active=active)
+        self.mqtt.publish_fixed("noaa", st)
+        if active:
+            secs = (dt.datetime.fromisoformat(alert["expires"])
+                    - dt.datetime.now(dt.timezone.utc)).total_seconds()
+            asyncio.get_running_loop().call_later(
+                max(1, secs), lambda: self.mqtt.publish_fixed("noaa", dict(st, active=False)))
+
+    # ------------------------------------------------------------- ADS-B / AIS
+    def _summary(self, slot_kind, seen):
+        """Aggregate state for the fixed 'receiver' HA device."""
+        lat0, lon0 = self.o.get("station_lat"), self.o.get("station_lon")
+        best, mx, npos = None, 0.0, 0
+        for st in seen.values():
+            if "latitude" in st and lat0 and lon0:
+                npos += 1
+                d = tools.distance_km(lat0, lon0, st["latitude"], st["longitude"])
+                mx = max(mx, d)
+                if best is None or d < best[0]:
+                    best = (d, st)
+        name_key = "flight" if slot_kind == "adsb" else "ship_name"
+        id_key = "icao" if slot_kind == "adsb" else "mmsi"
+        out = {"count": len(seen), "with_position": npos, "max_range_km": round(mx, 1)}
+        if best:
+            out["nearest"] = str(best[1].get(name_key) or best[1].get(id_key))
+            out["nearest_km"] = round(best[0], 1)
+        return out
+
+    async def _run_adsb(self, slot):
+        jdir = Path(f"/tmp/readsb-{re.sub(r'[^A-Za-z0-9_-]', '_', self.name)}")
+        jdir.mkdir(exist_ok=True)
+        for f in jdir.glob("*.json"):
+            f.unlink()
+        cmd = [_bin("readsb"), "--device-type", "rtlsdr", "--device", str(self.o["device"]),
+               "--write-json", str(jdir), "--write-json-every", "1", "--quiet"]
+        if self._gain():
+            cmd += ["--gain", self._gain()]
+        if int(self.o.get("ppm") or 0):
+            cmd += ["--ppm", str(self.o["ppm"])]
+        if self.o.get("station_lat") and self.o.get("station_lon"):
+            cmd += ["--lat", str(self.o["station_lat"]), "--lon", str(self.o["station_lon"])]
+        p = await self._spawn(cmd)
+        asyncio.create_task(self._drain_stderr(p, "readsb"))
+        seen, last_store = {}, {}
+
+        async def poller():
+            while p.returncode is None:
+                await asyncio.sleep(2)
+                try:
+                    data = json.loads((jdir / "aircraft.json").read_text())
+                except (OSError, ValueError):
+                    continue
+                for ac in data.get("aircraft", []):
+                    if ac.get("seen", 99) > 10:
+                        continue
+                    st = tools.parse_aircraft(ac)
+                    if not st:
+                        continue
+                    if "latitude" in st and self.o.get("station_lat"):
+                        st["distance_km"] = round(tools.distance_km(
+                            self.o["station_lat"], self.o["station_lon"],
+                            st["latitude"], st["longitude"]), 1)
+                    seen[st["icao"]] = st
+                    if time.time() - last_store.get(st["icao"], 0) >= 15:
+                        last_store[st["icao"]] = time.time()
+                        self._store(slot, "adsb", f"adsb:{st['icao']}",
+                                    st.get("aircraft_type") or "Aircraft", st["icao"], "",
+                                    "Aircraft (ADS-B)", 1090.0, ac.get("rssi"), None, st, ac)
+                self.mqtt.publish_fixed("adsb", self._summary("adsb", seen))
+
+        t = asyncio.create_task(poller())
+        try:
+            rc = await self._wait(p, t, self.ends)
+        finally:
+            t.cancel()
+        return self._early_exit_error(p, "readsb", rc)
+
+    async def _run_ais(self, slot):
+        cmd = [_bin("rtl_ais"), "-d", str(self.o["device"]), "-n", "-h", "127.0.0.1", "-P", "10110"]
+        if self._gain():
+            cmd += ["-g", self._gain()]
+        if int(self.o.get("ppm") or 0):
+            cmd += ["-p", str(self.o["ppm"])]
+        p = await self._spawn(cmd)
+        asm, seen = tools.AISAssembler(), {}
+
+        async def reader():   # rtl_ais -n logs NMEA on stderr
+            async for raw in p.stderr:
+                line = raw.decode(errors="replace").strip()
+                if not line:
+                    continue
+                if "!AIVD" not in line:
+                    p.stderr_tail.append(line)
+                    continue
+                st = asm.feed(line)
+                if not st:
+                    continue
+                prev = seen.get(st["mmsi"], {})
+                st = {**prev, **st}
+                if "latitude" in st and self.o.get("station_lat"):
+                    st["distance_km"] = round(tools.distance_km(
+                        self.o["station_lat"], self.o["station_lon"],
+                        st["latitude"], st["longitude"]), 1)
+                seen[st["mmsi"]] = st
+                self._store(slot, "ais", f"ais:{st['mmsi']}", "AIS", str(st["mmsi"]), "",
+                            "Ship (AIS)", 162.0, None, None, st, {"nmea": line})
+                self.mqtt.publish_fixed("ais", self._summary("ais", seen))
+
+        t = asyncio.create_task(reader())
+        rc = await self._wait(p, t, self.ends)
+        return self._early_exit_error(p, "rtl_ais", rc)
 
     # ------------------------------------------------------------- rtl_power
     async def _run_rtl_power(self, slot):

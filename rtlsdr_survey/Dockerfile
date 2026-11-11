@@ -1,4 +1,4 @@
-# RTL-SDR Survey: rtl_433 + rtl_power + radiosonde_auto_rx time-sliced on one dongle, MQTT + HA discovery.
+# RTL-SDR Survey: rtl_433, rtl_power, radiosonde_auto_rx, multimon-ng, Direwolf, readsb and rtl_ais time-sliced on one dongle, MQTT + HA discovery.
 # Works as a Home Assistant add-on or as a plain container.
 # The runtime stage is pinned to Debian on purpose: Supervisor's default BUILD_FROM is the
 # Alpine-based HA base image, and every stage here needs apt + glibc.
@@ -6,11 +6,14 @@
 # ---------------------------------------------------------------- C tools
 FROM debian:bookworm-slim AS cbuild
 ARG RTLSDR_REF=v1.3.6
+ARG READSB_REF=v3.16.21
+ARG RTLAIS_REF=master
 # rtl_433 development branch: ~100 more decoders than the 25.12 release (US car remotes, TPMS,
 # garage openers...). Pin a release tag (e.g. --build-arg RTL433_REF=25.12) if master breaks.
 ARG RTL433_REF=master
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake git pkg-config libusb-1.0-0-dev ca-certificates \
+        libncurses-dev zlib1g-dev libzstd-dev \
     && rm -rf /var/lib/apt/lists/*
 # rtl-sdr-blog fork of librtlsdr: same API, adds RTL-SDR Blog V4 (R828D) support
 RUN git clone --depth 1 --branch ${RTLSDR_REF} https://github.com/rtlsdrblog/rtl-sdr-blog.git /src/rtl-sdr \
@@ -24,6 +27,14 @@ RUN git clone --depth 1 --branch ${RTL433_REF} https://github.com/merbanan/rtl_4
          -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_PREFIX_PATH=/usr/local \
     && cmake --build /src/rtl_433/build -j"$(nproc)" \
     && cmake --install /src/rtl_433/build
+# readsb (ADS-B), built against the same librtlsdr
+RUN git clone --depth 1 --branch ${READSB_REF} https://github.com/wiedehopf/readsb.git /src/readsb \
+    && make -C /src/readsb -j"$(nproc)" RTLSDR=yes RTLSDR_PREFIX=/usr/local \
+    && install -m 0755 /src/readsb/readsb /usr/local/bin/readsb
+# rtl_ais (marine AIS)
+RUN git clone --depth 1 --branch ${RTLAIS_REF} https://github.com/dgiardini/rtl-ais.git /src/rtl-ais \
+    && PKG_CONFIG_PATH=/usr/local/lib/pkgconfig make -C /src/rtl-ais -j"$(nproc)" \
+    && install -m 0755 /src/rtl-ais/rtl_ais /usr/local/bin/rtl_ais
 
 # ---------------------------------------------------------------- radiosonde_auto_rx
 FROM debian:bookworm-slim AS autorx
@@ -44,13 +55,16 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libusb-1.0-0 libfftw3-single3 sox python3 python3-aiohttp python3-paho-mqtt python3-yaml ca-certificates \
+        multimon-ng direwolf libncurses6 zlib1g libzstd1 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=cbuild /usr/local/lib/ /usr/local/lib/
 COPY --from=cbuild /usr/local/bin/rtl_433 /usr/local/bin/rtl_power /usr/local/bin/rtl_fm \
-                   /usr/local/bin/rtl_sdr /usr/local/bin/rtl_test /usr/local/bin/rtl_eeprom /usr/local/bin/
+                   /usr/local/bin/rtl_sdr /usr/local/bin/rtl_test /usr/local/bin/rtl_eeprom \
+                   /usr/local/bin/readsb /usr/local/bin/rtl_ais /usr/local/bin/
 COPY --from=autorx /opt/auto_rx /opt/auto_rx
 COPY --from=autorx /opt/autorx-venv /opt/autorx-venv
-RUN ldconfig && rtl_433 -V 2>&1 | head -1 && test -x /opt/auto_rx/rs41mod
+RUN ldconfig && rtl_433 -V 2>&1 | head -1 && test -x /opt/auto_rx/rs41mod \
+    && readsb --version | head -1 && command -v rtl_ais multimon-ng direwolf
 
 COPY app /app
 WORKDIR /app

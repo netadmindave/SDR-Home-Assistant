@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0
+- New **Frequencies** tab: a checklist of every frequency/band the bundled tools support,
+  grouped by tool, plus a box for custom frequencies (`<freq> <rtl_433|aprs|noaa>` or
+  `<low>:<high>[:<step>] sweep`). Applies immediately. Replaces `survey_plan.yaml`, which is
+  no longer read.
+- New optional tools, each with an enable switch:
+  - Direwolf APRS (stations and weather stations as approvable devices)
+  - rtl_fm + multimon-ng NOAA weather radio SAME alerts ("NOAA weather alerts" HA device)
+  - readsb ADS-B ("ADS-B receiver" HA device, aircraft on the Devices tab)
+  - rtl_ais marine AIS ("AIS receiver" HA device, ships on the Devices tab)
+- New catalog entries: 418 MHz and 868.95 MHz for rtl_433.
+- **Multiple dongles:** Settings → Receivers lists any number of SDRs (by index or serial, with
+  per-dongle gain/ppm and a **Detect dongles** button). *Rotating* dongles share the scan, split
+  by listening time; *dedicated* dongles run only the frequencies assigned to them (one = parked
+  full time). Each frequency on the Frequencies tab has a dongle picker. Radiosondes can get their
+  own dongle. With no receivers listed, the single `device` option works as before.
+
 ## 0.5.1
 - Fix Settings "Could not save: Extra data: line 1 column 4": the add-on called the Supervisor's
   options/validate endpoint, which add-ons aren't allowed to use (plain-text 403). Validation is

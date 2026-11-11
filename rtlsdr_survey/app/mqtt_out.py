@@ -49,6 +49,7 @@ class MQTTOut:
             self.announce(d)
         if self.o.get("radiosonde_enabled") and self.o.get("radiosonde_publish_ha"):
             self.announce_radiosonde()
+        self.sync_fixed()
 
     def _on_disconnect(self, *args):
         self.connected = False
@@ -77,8 +78,8 @@ class MQTTOut:
         payload["last_seen"] = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
         self.pub(self._state_topic(dev), payload, retain=True)
 
-    def status(self, payload):
-        self.pub(f"{self.base}/scanner", payload, retain=True)
+    def status(self, payload, sdr=None):
+        self.pub(f"{self.base}/scanner" + (f"/{sdr}" if sdr else ""), payload, retain=True)
 
     # ------------------------------------------------------------ discovery
     def _state_topic(self, dev):
@@ -191,3 +192,70 @@ class MQTTOut:
                 "latitude": state["latitude"], "longitude": state["longitude"],
                 "gps_accuracy": 30, "altitude": state.get("altitude_m"),
                 "serial": state.get("serial")}, retain=True)
+
+    # ------------------------------------------------------------ fixed devices (alerts, receivers)
+    FIXED = {
+        "noaa": ("NOAA weather alerts", "enable_noaa", {
+            "active": ("binary_sensor", "safety", None, None, None, "Alert active"),
+            "event": ("sensor", None, None, None, None, "Last alert"),
+            "event_code": ("sensor", None, None, None, None, "Event code"),
+            "locations": ("sensor", None, None, None, None, "Areas (FIPS)"),
+            "sender": ("sensor", None, None, None, "diagnostic", "Sender"),
+            "issued": ("sensor", "timestamp", None, None, None, "Issued"),
+            "expires": ("sensor", "timestamp", None, None, None, "Expires"),
+            "frequency_mhz": ("sensor", "frequency", "MHz", None, "diagnostic", "Frequency"),
+        }),
+        "adsb": ("ADS-B receiver", "enable_adsb", {
+            "count": ("sensor", None, "aircraft", "measurement", None, "Aircraft seen"),
+            "with_position": ("sensor", None, "aircraft", "measurement", None, "Aircraft with position"),
+            "max_range_km": ("sensor", "distance", "km", "measurement", None, "Max range"),
+            "nearest": ("sensor", None, None, None, None, "Nearest aircraft"),
+            "nearest_km": ("sensor", "distance", "km", "measurement", None, "Nearest distance"),
+            "last_seen": ("sensor", "timestamp", None, None, "diagnostic", "Last update"),
+        }),
+        "ais": ("AIS receiver", "enable_ais", {
+            "count": ("sensor", None, "ships", "measurement", None, "Ships seen"),
+            "with_position": ("sensor", None, "ships", "measurement", None, "Ships with position"),
+            "max_range_km": ("sensor", "distance", "km", "measurement", None, "Max range"),
+            "nearest": ("sensor", None, None, None, None, "Nearest ship"),
+            "nearest_km": ("sensor", "distance", "km", "measurement", None, "Nearest distance"),
+            "last_seen": ("sensor", "timestamp", None, None, "diagnostic", "Last update"),
+        }),
+    }
+
+    def announce_fixed(self, slug):
+        if not self.client or slug not in self.FIXED:
+            return
+        title, _opt, fields = self.FIXED[slug]
+        device = {"identifiers": [f"rtlsdr_{slug}"], "name": title, "manufacturer": "via rtlsdr_survey"}
+        st = f"{self.base}/{slug}/state"
+        for field, (comp, dclass, unit, sclass, ecat, name) in fields.items():
+            tpl = ("{{ 'ON' if value_json.%s else 'OFF' }}" if comp == "binary_sensor"
+                   else "{{ value_json.%s }}") % field
+            cfg = {"name": name, "unique_id": f"rtlsdr_{slug}_{field}", "object_id": f"{slug}_{field}",
+                   "state_topic": st, "value_template": tpl, "device": device,
+                   "availability_topic": f"{self.base}/status"}
+            for k, v in (("device_class", dclass), ("unit_of_measurement", unit),
+                         ("state_class", sclass), ("entity_category", ecat)):
+                if v:
+                    cfg[k] = v
+            self.pub(f"{self.disc}/{comp}/rtlsdr_{slug}/{field}/config", cfg, retain=True)
+
+    def unannounce_fixed(self, slug):
+        if not self.client or slug not in self.FIXED:
+            return
+        for field, spec in self.FIXED[slug][2].items():
+            self.pub(f"{self.disc}/{spec[0]}/rtlsdr_{slug}/{field}/config", "", retain=True)
+
+    def sync_fixed(self):
+        """Announce receivers for enabled tools; remove the rest."""
+        for slug, (_t, opt, _f) in self.FIXED.items():
+            if self.o.get(opt):
+                self.announce_fixed(slug)
+            else:
+                self.unannounce_fixed(slug)
+
+    def publish_fixed(self, slug, state):
+        payload = dict(state)
+        payload["last_seen"] = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+        self.pub(f"{self.base}/{slug}/state", payload, retain=True)

@@ -8,6 +8,8 @@ from aiohttp import web
 import settings as st
 
 STATIC = Path(__file__).with_name("static")
+# transient or broadcast sources: published through fixed HA devices, not per-device approval
+NON_APPROVABLE = {"auto_rx", "adsb", "ais", "noaa"}
 
 
 def build_app(scanner, db, mqtt):
@@ -61,8 +63,8 @@ def build_app(scanner, db, mqtt):
             raise web.HTTPNotFound()
         db.update_device(uid, **body)
         after = db.device(uid)
-        if after["source"] == "auto_rx":
-            db.update_device(uid, approved=0)  # sondes publish via the shared tracker device
+        if after["source"] in NON_APPROVABLE:
+            db.update_device(uid, approved=0)  # these publish via a shared receiver device
             after = db.device(uid)
         if after["approved"] and (not before["approved"] or before["name"] != after["name"]):
             mqtt.announce(after)
@@ -87,8 +89,8 @@ def build_app(scanner, db, mqtt):
             raise web.HTTPBadRequest(text="mode must be auto, survey or monitor")
         # keep the add-on configuration in sync with the header selector
         try:
-            new_user = await st.save({"mode": scanner.mode})
-            scanner.o["_user"] = new_user
+            await st.save({"mode": scanner.mode})
+            scanner.o["_user"] = dict(scanner.o.get("_user") or {}, mode=scanner.mode)
             scanner.o["mode"] = scanner.mode
             db.set_setting("mode_option", scanner.mode)
         except Exception as e:  # noqa: BLE001
@@ -99,14 +101,14 @@ def build_app(scanner, db, mqtt):
         body = await req.json() if req.can_read_body else {}
         minutes = float(body.get("minutes", 120))
         if minutes <= 0:
-            scanner.rs_force_until = 0.0
-            scanner.skip()
+            scanner.stop_radiosonde()
         else:
             scanner.force_radiosonde(minutes)
         return web.json_response({"ok": True})
 
-    async def skip(_):
-        scanner.skip()
+    async def skip(req):
+        body = await req.json() if req.can_read_body else {}
+        scanner.skip(body.get("sdr"))
         return web.json_response({"ok": True})
 
     async def reset(_):
@@ -118,6 +120,34 @@ def build_app(scanner, db, mqtt):
         data = {"devices": db.devices(), "signals": db.signals(1), "slots": db.slots()}
         return web.json_response(data, headers={
             "Content-Disposition": "attachment; filename=rtlsdr_survey.json"})
+
+    async def get_dongles(_):
+        """List connected RTL-SDRs (index, name, serial) without opening them."""
+        import re as _re
+        from scanner import _bin
+        try:
+            p = await asyncio.create_subprocess_exec(
+                _bin("rtl_test"), "-d", "9999", stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT)
+            out, _ = await asyncio.wait_for(p.communicate(), 10)
+        except (OSError, asyncio.TimeoutError) as e:
+            return web.json_response({"dongles": [], "error": str(e)})
+        found = []
+        for m in _re.finditer(r"^\s*(\d+):\s+(.*?),\s+(.*?),\s+SN:\s*(\S*)", out.decode(errors="replace"), _re.M):
+            found.append({"index": int(m.group(1)), "vendor": m.group(2), "product": m.group(3),
+                          "serial": m.group(4)})
+        in_use = {str(s.o["device"]): s.name for s in scanner.scanners}
+        for d in found:
+            d["used_by"] = in_use.get(d["serial"]) or in_use.get(str(d["index"]))
+        return web.json_response({"dongles": found})
+
+    async def get_frequencies(_):
+        import catalog
+        d = catalog.describe(scanner.o)
+        d["sdrs"] = [{"name": s.name, "role": s.role, "device": str(s.o["device"])} for s in scanner.scanners]
+        d["assignments"] = scanner.o.get("assignments") or []
+        d["dwell"] = {"decode": scanner.o["decode_dwell_s"], "sweep": scanner.o["sweep_dwell_s"]}
+        return web.json_response(d)
 
     async def get_settings(_):
         return web.json_response(st.describe(scanner.o))
@@ -136,7 +166,13 @@ def build_app(scanner, db, mqtt):
         except Exception as e:  # noqa: BLE001
             return web.json_response({"ok": False, "errors": {"_": f"Could not save: {e}"}},
                                      status=502)
-        scanner.o["_user"] = {k: v for k, v in new_user.items() if v is not None}
+        merged = dict(user)
+        for k, v in clean.items():
+            if v is None:
+                merged.pop(k, None)
+            else:
+                merged[k] = v
+        scanner.o["_user"] = merged
         live = {k: v for k, v in clean.items() if st.SPEC_BY_KEY[k][6]}
         needs_restart = any(not st.SPEC_BY_KEY[k][6] for k in clean)
         if live:
@@ -153,6 +189,8 @@ def build_app(scanner, db, mqtt):
 
     r.add_get("/", index)
     r.add_get("/api/settings", get_settings)
+    r.add_get("/api/frequencies", get_frequencies)
+    r.add_get("/api/dongles", get_dongles)
     r.add_post("/api/settings", post_settings)
     r.add_get("/api/status", status)
     r.add_get("/api/devices", devices)

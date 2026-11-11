@@ -79,7 +79,19 @@ SPEC = [
      "Every decode (approved or not) to <base>/survey/<uid>.", True),
 
     ("Advanced", "log_level", "Log level", "choice", ["debug", "info", "warning", "error"], "", False),
+
+    # Tools + frequencies: edited on the Frequencies tab (hidden in the Settings list)
+    ("Tools", "enable_aprs", "Direwolf APRS", "bool", None, "", True),
+    ("Tools", "enable_noaa", "NOAA SAME alerts", "bool", None, "", True),
+    ("Tools", "enable_adsb", "readsb ADS-B", "bool", None, "", True),
+    ("Tools", "enable_ais", "rtl_ais AIS", "bool", None, "", True),
+    ("Frequencies", "frequencies", "Selected frequencies", "idlist", None, "", True),
+    ("Frequencies", "assignments", "Frequency → dongle assignments", "assign", None, "", True),
+    ("Receivers", "sdrs", "Receivers (SDRs)", "sdrs", None, "", False),
+    ("Frequencies", "custom_frequencies", "Custom frequencies", "lines", None, "", True),
 ]
+HIDDEN_GROUPS = {"Tools", "Frequencies", "Receivers"}
+SDR_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
 SPEC_BY_KEY = {s[1]: s for s in SPEC}
 # Optional in the add-on schema: an empty value removes the key instead of failing validation.
 OPTIONAL = {"survey_schedule", "mqtt_host", "mqtt_port", "mqtt_user", "mqtt_password",
@@ -98,6 +110,8 @@ def describe(opts):
     user = opts.get("_user") or {}
     out = []
     for group, key, label, typ, extra, help_, live in SPEC:
+        if group in HIDDEN_GROUPS:
+            continue
         default = DEFAULTS.get(key)
         if key in OPTIONAL and default in (0, 0.0, "", None):
             default = ""          # unset optional -> empty field (auto/disabled)
@@ -112,7 +126,9 @@ def describe(opts):
                     "min": extra[0] if typ in ("int", "float") and extra else None,
                     "max": extra[1] if typ in ("int", "float") and extra else None,
                     "help": help_, "live": live, "value": val, "hint": hint})
-    return {"settings": out, "backend": "supervisor" if has_supervisor() else "file"}
+    return {"settings": out, "backend": "supervisor" if has_supervisor() else "file",
+            "sdrs": user.get("sdrs") or [],
+            "legacy_device": str(user.get("device", DEFAULTS["device"]))}
 
 
 def validate(changes):
@@ -130,11 +146,66 @@ def validate(changes):
                     continue          # unchanged
                 clean[key] = None if raw in ("", None) else str(raw)
                 continue
-            if raw in ("", None):
+            if raw in ("", None) and typ not in ("idlist", "lines", "sdrs", "assign"):
                 if key in OPTIONAL:
                     clean[key] = None
                     continue
                 raise ValueError("required")
+            if typ == "sdrs":
+                v, names, devs = [], set(), set()
+                for i, s in enumerate(raw or []):
+                    name = str(s.get("name") or "").strip()
+                    dev = str(s.get("device") or "").strip()
+                    role = str(s.get("role") or "rotating")
+                    if not SDR_NAME_RE.match(name):
+                        raise ValueError(f"receiver {i + 1}: name must be 1-24 letters, digits, - or _")
+                    if name in names:
+                        raise ValueError(f"receiver name '{name}' is used twice")
+                    if not dev:
+                        raise ValueError(f"receiver '{name}': device (index or serial) is required")
+                    if dev in devs:
+                        raise ValueError(f"device '{dev}' is used by two receivers")
+                    if role not in ("rotating", "dedicated"):
+                        raise ValueError(f"receiver '{name}': role must be rotating or dedicated")
+                    item = {"name": name, "device": dev, "role": role}
+                    gain = str(s.get("gain") or "").strip()
+                    if gain:
+                        if gain.lower() != "auto":
+                            float(gain)
+                        item["gain"] = gain
+                    if str(s.get("ppm") or "").strip() not in ("", "0"):
+                        item["ppm"] = int(float(s["ppm"]))
+                    names.add(name)
+                    devs.add(dev)
+                    v.append(item)
+                clean[key] = v
+                continue
+            if typ == "assign":
+                v = []
+                for line in raw or []:
+                    k, _, n = str(line).partition("=")
+                    if not k.strip() or not SDR_NAME_RE.match(n.strip()):
+                        raise ValueError(f"bad assignment '{line}'")
+                    v.append(f"{k.strip()}={n.strip()}")
+                clean[key] = v
+                continue
+            if typ == "idlist":
+                from catalog import BY_ID
+                v = [str(x) for x in (raw or [])]
+                bad = [x for x in v if x not in BY_ID]
+                if bad:
+                    raise ValueError(f"unknown frequency ids {bad}")
+                clean[key] = v
+                continue
+            if typ == "lines":
+                from catalog import parse_custom
+                v = [str(x).strip() for x in (raw if isinstance(raw, list) else str(raw).splitlines())
+                     if str(x).strip()]
+                _, errs = parse_custom(v)
+                if errs:
+                    raise ValueError("; ".join(errs))
+                clean[key] = v
+                continue
             if typ == "bool":
                 v = raw if isinstance(raw, bool) else str(raw).lower() in ("1", "true", "on", "yes")
             elif typ == "int":

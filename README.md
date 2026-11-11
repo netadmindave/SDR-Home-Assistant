@@ -6,11 +6,12 @@
 
 ![Supports amd64](https://img.shields.io/badge/amd64-yes-green.svg) ![Supports aarch64](https://img.shields.io/badge/aarch64-yes-green.svg)
 
-One RTL-SDR dongle, time-sliced between three tools:
+One RTL-SDR dongle, time-sliced between these tools (the optional ones are off until you enable them on the **Frequencies** tab):
 
-- **rtl_433** decodes 300–928 MHz sensors: weather, temp/humidity, TPMS, door/window, remotes.
+- **rtl_433** (development branch, ~390 decoders) decodes 300–928 MHz sensors: weather, temp/humidity, TPMS, door/window, remotes.
 - **rtl_power** runs peak-hold sweeps of the unlicensed bands to find transmitters nothing decoded.
 - **radiosonde_auto_rx** tracks NWS weather balloons during the twice-daily launch windows.
+- *Optional:* **Direwolf** (APRS), **rtl_fm + multimon-ng** (NOAA weather radio SAME alerts), **readsb** (ADS-B aircraft), **rtl_ais** (marine AIS).
 
 **Survey mode** runs for days and builds an inventory of everything it hears. **Approve** the devices you want, and they appear in Home Assistant through MQTT discovery. **Monitor mode** then parks the dongle on the frequencies your approved devices use.
 
@@ -29,4 +30,8 @@ To run it without Home Assistant OS, see the `docker-compose.yml` in this repo.
 This add-on wraps these projects; all credit for the decoding goes to them:
 [rtl_433](https://github.com/merbanan/rtl_433) (GPL-2.0),
 [radiosonde_auto_rx](https://github.com/projecthorus/radiosonde_auto_rx) (GPL-3.0),
-[rtl-sdr-blog librtlsdr](https://github.com/rtlsdrblog/rtl-sdr-blog) (GPL-2.0).
+[rtl-sdr-blog librtlsdr](https://github.com/rtlsdrblog/rtl-sdr-blog) (GPL-2.0),
+[multimon-ng](https://github.com/EliasOenal/multimon-ng) (GPL-2.0),
+[Dire Wolf](https://github.com/wb2osz/direwolf) (GPL-2.0),
+[readsb](https://github.com/wiedehopf/readsb) (GPL-3.0),
+[rtl-ais](https://github.com/dgiardini/rtl-ais) (GPL-2.0).

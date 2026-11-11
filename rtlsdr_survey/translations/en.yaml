@@ -65,6 +65,26 @@ configuration:
   survey_all_decoders:
     name: Enable all decoders while surveying
     description: Also turn on rtl_433's off-by-default decoders during survey slots. Finds more devices; more false matches.
+  frequencies:
+    name: Frequencies
+    description: Catalog ids to include in the scan. Easier to edit on the add-on's Frequencies tab.
+  custom_frequencies:
+    name: Custom frequencies
+    description: "One per line: '<freq> <rtl_433|aprs|noaa>' or '<low>:<high>:<step> sweep'."
+  sdrs:
+    name: Receivers (SDRs)
+    description: "Empty = one dongle (the Dongle option). Several: one entry per dongle with a name, device index or serial, and role (rotating = shares the scan; dedicated = only the frequencies assigned to it). Easier to edit on the add-on's Settings tab."
+  assignments:
+    name: Frequency assignments
+    description: "'<frequency id>=<receiver name>'. Set on the add-on's Frequencies tab."
+  enable_aprs:
+    name: Direwolf APRS
+  enable_noaa:
+    name: NOAA weather radio SAME alerts
+  enable_adsb:
+    name: readsb ADS-B aircraft
+  enable_ais:
+    name: rtl_ais marine AIS
   radiosonde_enabled:
     name: Track radiosondes
     description: Hand the dongle to radiosonde_auto_rx during the launch windows.

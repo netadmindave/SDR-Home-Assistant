@@ -61,6 +61,22 @@
   .savebar { position:sticky; bottom:0; background:var(--card); border-top:1px solid var(--line);
              padding:10px 0; display:flex; gap:10px; align-items:center; }
   .msg-ok { color:var(--ok); } .msg-bad { color:var(--bad); }
+  .fgroup { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:12px; }
+  .fgroup.off .fitems { opacity:.45; }
+  .fhead { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+  .fhead b { font-size:14.5px; }
+  .fitems { display:grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap:4px 16px; }
+  .fitem { display:flex; gap:8px; align-items:flex-start; padding:3px 0; }
+  .fitem .mute { font-size:12px; }
+  textarea { width:100%; min-height:110px; font:13px ui-monospace,Menlo,monospace; color:var(--fg);
+             background:var(--card); border:1px solid var(--line); border-radius:6px; padding:8px; }
+  .switch { display:inline-flex; align-items:center; gap:6px; font-size:13px; }
+  .fitem select { font-size:12px; padding:1px 4px; margin-left:auto; }
+  .fitemwrap { display:flex; gap:6px; align-items:flex-start; }
+  .nowline { display:grid; grid-template-columns: 80px 1fr; gap:6px; align-items:center; font-size:12.5px; }
+  .nowline .bar { margin-top:0; }
+  .rtable td, .rtable th { padding:4px 6px; }
+  .rtable input, .rtable select { width:100%; }
 </style>
 </head>
 <body>
@@ -81,6 +97,7 @@
   <button data-tab="signals">Undecoded signals <span id="nsig" class="mute"></span></button>
   <button data-tab="coverage">Coverage</button>
   <button data-tab="log">Log</button>
+  <button data-tab="freqs">Frequencies</button>
   <button data-tab="settings">Settings</button>
 </nav>
 <main>
@@ -126,8 +143,34 @@
 
   <section id="tab-log" class="panel" hidden><div id="log" class="log"></div></section>
 
+  <section id="tab-freqs" class="panel" hidden>
+    <p class="mute" id="fmulti"></p>
+    <p class="mute">Tick what the scanner should visit. Each tool shares the one dongle, so every extra frequency makes the survey cycle longer. Tools that need a dedicated antenna or constant listening (ADS-B, NOAA alerts) are noted.</p>
+    <div id="fbody"></div>
+    <div class="fgroup">
+      <div class="fhead"><b>Custom frequencies</b><span class="mute">one per line</span></div>
+      <textarea id="fcustom" spellcheck="false" placeholder="418.5M rtl_433 Gate remote&#10;162.475M noaa&#10;144.39M aprs&#10;418M:420M:10k sweep"></textarea>
+      <div class="mute">Format: <code>&lt;freq&gt; &lt;rtl_433 | aprs | noaa&gt; [name]</code> or <code>&lt;low&gt;:&lt;high&gt;[:&lt;step&gt;] sweep [name]</code>. Frequencies 24–1766 MHz, e.g. <code>433.42M</code>. Lines starting with # are ignored.</div>
+      <div id="fcustomerr" class="msg-bad"></div>
+      <div id="fcustomassign"></div>
+    </div>
+    <div class="savebar">
+      <button id="fsave" class="primary" disabled>Save</button>
+      <button id="freset" disabled>Discard changes</button>
+      <span id="fmsg" class="mute"></span><span style="flex:1"></span><span id="fcycle" class="mute"></span>
+    </div>
+  </section>
+
   <section id="tab-settings" class="panel" hidden>
     <p class="mute" id="sback"></p>
+    <div class="sgroup"><h3>Receivers (SDRs) <span class="badge rs">restart</span></h3>
+      <p class="mute">One dongle needs nothing here: it uses <b>Dongle</b> under Radio. For several, add one row per dongle.
+        <b>Rotating</b> dongles share the scan between them (survey/monitor modes apply). <b>Dedicated</b> dongles only run the frequencies you assign to them on the Frequencies tab: one frequency = parked there full time.
+        Use serial numbers (set with <code>rtl_eeprom -s</code>) so dongles keep their roles after a reboot.</p>
+      <table class=rtable><thead><tr><th>Name</th><th>Device (index or serial)</th><th>Role</th><th>Gain</th><th>PPM</th><th></th></tr></thead><tbody id="rbody"></tbody></table>
+      <div class="tools" style="margin-top:8px"><button id="radd">Add receiver</button><button id="rdetect">Detect dongles</button><span id="rdet" class="mute"></span></div>
+      <div id="err-sdrs" class="msg-bad"></div>
+    </div>
     <div id="sform"></div>
     <div class="savebar">
       <button id="ssave" class="primary" disabled>Save</button>
@@ -177,7 +220,7 @@ function renderDevices() {
       <td class=num>${d.count}</td><td class=num>${d.snr != null ? (+d.snr).toFixed(1) : "—"}</td>
       <td>${ago(d.last_seen)}<div class=mute>first ${ago(d.first_seen)}</div></td>
       <td class=mute>${summary(d.last_state)}</td>
-      <td>${d.source === "auto_rx" ? `<span class=mute title="Published via the Radiosonde tracker device">tracker</span>`
+      <td>${["auto_rx","adsb","ais","noaa"].includes(d.source) ? `<span class=mute title="Published via a shared receiver device in HA">receiver</span>`
           : `<input type=checkbox data-approve="${d.uid}" ${d.approved?"checked":""} title="Publish to Home Assistant">`}</td></tr>`;
     if (open.has(d.uid)) h += `<tr class=detail><td colspan=9><div class=grid>
         <div><div class=tools>
@@ -221,19 +264,29 @@ function renderStatus() {
     : "Monitor plan: approve devices to build one.";
   const m = $("#mqtt"); m.className = "pill " + (ST.mqtt_connected ? "ok" : "bad");
   m.textContent = ST.mqtt_host ? (ST.mqtt_connected ? "MQTT connected" : "MQTT disconnected") : "MQTT not configured";
-  const c = ST.current;
-  if (c) { $("#nowtxt").innerHTML = `<b>${esc(c.name)}</b> · ${esc(c.decoder)} · ${esc(c.freq)} · ${c.elapsed}s / ${c.dwell}s · ${c.events} events` + (c.waiting_for ? ` · waiting for ${c.waiting_for} device(s)` : "");
-           $("#nowbar").style.width = Math.min(100, 100*c.elapsed/c.dwell) + "%"; }
-  else { $("#nowtxt").textContent = "between slots…"; $("#nowbar").style.width = "0"; }
+  const c = ST.current, sdrs = ST.sdrs || [];
+  const line = s => s.current ? `<b>${esc(s.current.name)}</b> · ${esc(s.current.decoder)} · ${esc(s.current.freq)} · ${s.current.elapsed}s / ${s.current.dwell}s · ${s.current.events} events` + (s.current.waiting_for ? ` · waiting for ${s.current.waiting_for} device(s)` : "") : (s.role === "dedicated" && !s.order.length ? "idle: nothing assigned" : "between slots…");
+  if (sdrs.length > 1) {
+    $("#nowtxt").innerHTML = sdrs.map(s => `<div class=nowline title="device ${esc(s.device)} · ${esc(s.role)}"><span><b>${esc(s.sdr)}</b>${s.role === "dedicated" ? " 📌" : ""}</span>
+      <div>${line(s)}<div class=bar><i style="width:${s.current ? Math.min(100, 100*s.current.elapsed/s.current.dwell) : 0}%"></i></div></div></div>`).join("");
+    $("#nowbar").parentElement.hidden = true;
+  } else {
+    $("#nowbar").parentElement.hidden = false;
+    $("#nowtxt").innerHTML = line(sdrs[0] || ST);
+    $("#nowbar").style.width = c ? Math.min(100, 100*c.elapsed/c.dwell) + "%" : "0";
+  }
   const r = ST.radiosonde || {};
   if (!r.enabled) { $("#rsinfo").textContent = ""; $("#rsnow").hidden = true; }
   else {
-    const tracking = c && c.decoder === "auto_rx";
+    const host = sdrs.find(s => s.rs_host) || {};
+    const tracking = host.current && host.current.decoder === "auto_rx";
     $("#rsnow").textContent = tracking ? "Stop sonde tracking" : "Track sondes now";
     $("#rsinfo").innerHTML = tracking ? `🎈 tracking · <a href="${location.protocol}//${location.hostname}:${r.web_port}/" target=_blank>auto_rx map</a>`
       : (r.next_window ? "🎈 next sonde window " + new Date(r.next_window).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}) : "");
   }
-  $("#cyc").textContent = `One full cycle ≈ ${dur(ST.cycle_seconds)} over ${ST.order.length} slots · plan: ${ST.plan_source}`;
+  $("#cyc").textContent = sdrs.length > 1
+    ? sdrs.map(s => `${s.sdr}: ${s.role === "dedicated" ? "dedicated, " : ""}${s.order.length} slot(s), cycle ≈ ${dur(s.cycle_seconds)}`).join(" · ")
+    : `One full cycle ≈ ${dur(ST.cycle_seconds)} over ${ST.order.length} slots`;
   $("#slotbody").innerHTML = (ST.slots||[]).sort((a,b)=>a.name.localeCompare(b.name)).map(s => `<tr>
     <td>${esc(s.name)}</td><td>${esc(s.decoder)}</td><td>${esc(s.freq_desc)}</td>
     <td class=num>${s.runs}</td><td class=num>${dur(s.dwell_total)}</td><td class=num>${s.events}</td>
@@ -278,13 +331,45 @@ function renderSettings() {
       <div>${sInput(s)}</div>
       <div class=mute>${esc(s.help || "")}${s.hint ? `<div><i>${esc(s.hint)}</i></div>` : ""}<div class=msg-bad id="err-${s.key}"></div></div>
     </div>`).join("") + `</div>`).join("");
+  RCV = JSON.parse(JSON.stringify(SET.sdrs || []));
+  renderReceivers();
   SDIRTY = {}; sUpdateBar();
 }
+let RCV = [];
+function renderReceivers() {
+  $("#rbody").innerHTML = RCV.length ? RCV.map((r, i) => `<tr>
+    <td><input type=text data-ri="${i}" data-rk="name" value="${esc(r.name || "")}" placeholder="e.g. door"></td>
+    <td><input type=text data-ri="${i}" data-rk="device" value="${esc(r.device || "")}" placeholder="0 or serial"></td>
+    <td><select data-ri="${i}" data-rk="role">${["rotating","dedicated"].map(x => `<option ${x === (r.role || "rotating") ? "selected" : ""}>${x}</option>`).join("")}</select></td>
+    <td><input type=text data-ri="${i}" data-rk="gain" value="${esc(r.gain || "")}" placeholder="auto"></td>
+    <td><input data-ri="${i}" data-rk="ppm" type=number value="${esc(r.ppm ?? "")}" placeholder="0"></td>
+    <td><button data-rdel="${i}">Remove</button></td></tr>`).join("")
+    : `<tr><td colspan=6 class=mute>Single dongle: device ${esc(SET.legacy_device)} (the Dongle setting under Radio).</td></tr>`;
+}
+function rDirty() {
+  const clean = RCV.map(r => Object.fromEntries(Object.entries(r).filter(([k, v]) => v !== "" && v != null)));
+  if (JSON.stringify(clean) === JSON.stringify(SET.sdrs || [])) delete SDIRTY.sdrs; else SDIRTY.sdrs = clean;
+  $("#err-sdrs").textContent = ""; sUpdateBar();
+}
+document.addEventListener("input", e => {
+  const i = e.target.dataset && e.target.dataset.ri; if (i === undefined) return;
+  RCV[+i][e.target.dataset.rk] = e.target.value; rDirty();
+});
+$("#radd").onclick = () => {
+  if (!RCV.length) RCV.push({name: "sdr0", device: SET.legacy_device || "0", role: "rotating"});
+  RCV.push({name: "sdr" + RCV.length, device: "", role: "dedicated"}); renderReceivers(); rDirty();
+};
+$("#rdetect").onclick = async () => {
+  $("#rdet").textContent = "Looking…";
+  const d = await api("api/dongles");
+  if (!d.dongles.length) { $("#rdet").textContent = d.error ? "Error: " + d.error : "No RTL-SDR dongles found."; return; }
+  $("#rdet").innerHTML = d.dongles.map(x => `#${x.index} ${esc(x.product)} SN <b>${esc(x.serial || "—")}</b>${x.used_by ? ` (used by ${esc(x.used_by)})` : ` <button data-ruse="${esc(x.serial || x.index)}">use</button>`}`).join(" · ");
+};
 function sValue(el) { return el.type === "checkbox" ? el.checked : el.value; }
 function sUpdateBar() {
   const n = Object.keys(SDIRTY).length;
   $("#ssave").disabled = !n; $("#sreset").disabled = !n;
-  const rs = Object.keys(SDIRTY).some(k => !SET.settings.find(s => s.key === k).live);
+  const rs = Object.keys(SDIRTY).some(k => k === "sdrs" || !SET.settings.find(s => s.key === k).live);
   $("#ssave").textContent = n ? `Save ${n} change${n > 1 ? "s" : ""}${rs ? " & restart" : ""}` : "Save";
 }
 async function loadSettings() { SET = await api("api/settings"); renderSettings(); }
@@ -304,7 +389,7 @@ $("#ssave").onclick = async () => {
   if (!d.ok) {
     $("#smsg").className = "msg-bad";
     $("#smsg").textContent = d.errors._ || "Fix the highlighted settings.";
-    for (const [k, m] of Object.entries(d.errors || {})) if (k !== "_" && $("#row-" + k)) { $("#row-" + k).classList.add("bad"); $("#err-" + k).textContent = m; }
+    for (const [k, m] of Object.entries(d.errors || {})) if (k !== "_" && $("#err-" + k)) { $("#row-" + k) && $("#row-" + k).classList.add("bad"); $("#err-" + k).textContent = m; }
     $("#ssave").disabled = false; return;
   }
   $("#smsg").className = "msg-ok";
@@ -312,11 +397,111 @@ $("#ssave").onclick = async () => {
   if (d.restart) setTimeout(() => location.reload(), 12000); else { await loadSettings(); refresh(); }
 };
 
+// ---------------------------------------------------------------- frequencies tab
+let FQ = null, FQorig = null;
+const GROUP_TOOL = {"rtl_433":"rtl_433", "rtl_power sweeps":"rtl_power", "Radiosondes":"auto_rx",
+  "APRS":"aprs", "NOAA weather radio":"noaa", "ADS-B":"adsb", "AIS":"ais"};
+const TOOL_NOTES = {
+  noaa: "Alerts only arrive while the dongle is on the NOAA channel, so a rotating dongle will miss most of them; a second dongle parked on your local channel is the reliable setup.",
+  adsb: "Aircraft are only tracked while the 1090 MHz slot runs; range depends heavily on the antenna.",
+  ais: "Ships in range of navigable water only.",
+  auto_rx: "Runs during the radiosonde launch windows (Settings → Radiosondes), not in the survey rotation."};
+function fState() {
+  const sel = [...document.querySelectorAll("input[data-fid]")].filter(x => x.checked).map(x => x.dataset.fid);
+  const tools = {}; document.querySelectorAll("input[data-tool]").forEach(x => tools[x.dataset.tool] = x.checked);
+  const custom = $("#fcustom").value.split("\n").map(s => s.trim()).filter(Boolean);
+  const assign = {}; document.querySelectorAll("select[data-assign]").forEach(x => { if (x.value) assign[x.dataset.assign] = x.value; });
+  return {sel, tools, custom, assign};
+}
+function fChanges() {
+  if (!FQ) return {};
+  const s = fState(), o = FQorig, ch = {};
+  if (JSON.stringify([...s.sel].sort()) !== JSON.stringify([...o.sel].sort())) ch.frequencies = s.sel;
+  if (JSON.stringify(s.custom) !== JSON.stringify(o.custom)) ch.custom_frequencies = s.custom;
+  for (const t of FQ.tools) if (t.option && s.tools[t.id] !== o.tools[t.id]) ch[t.option] = s.tools[t.id];
+  const al = m => Object.entries(m).map(([k, v]) => `${k}=${v}`).sort();
+  if (JSON.stringify(al(s.assign)) !== JSON.stringify(al(o.assign))) ch.assignments = al(s.assign);
+  return ch;
+}
+function fUpdate() {
+  const ch = fChanges(), n = Object.keys(ch).length;
+  $("#fsave").disabled = !n; $("#freset").disabled = !n;
+  $("#fsave").textContent = n ? "Save changes" : "Save";
+  const s = fState();
+  document.querySelectorAll(".fgroup[data-tool]").forEach(g => g.classList.toggle("off", s.tools[g.dataset.tool] === false));
+  // rough cycle estimate
+  let secs = 0;
+  for (const c of FQ.catalog) {
+    const tool = GROUP_TOOL[c.group];
+    if (!s.sel.includes(c.id) || s.tools[tool] === false || tool === "auto_rx") continue;
+    secs += (c.decoder === "rtl_power" ? FQ.dwell.sweep : FQ.dwell.decode) * c.weight;
+  }
+  secs += s.custom.length * FQ.dwell.decode;
+  const nrot = (FQ.sdrs || []).filter(x => x.role === "rotating").length || 1;
+  $("#fcycle").textContent = nrot > 1 ? `Survey cycle ≈ ${dur(secs / nrot)} (split over ${nrot} rotating dongles)` : `Survey cycle ≈ ${dur(secs)}`;
+}
+function picker(id, isRs) {
+  if (!FQ.sdrs || FQ.sdrs.length < 2) return "";
+  const cur = (FQ.assignMap || {})[id] || "";
+  return `<select data-assign="${esc(id)}" title="Which dongle runs this">
+    <option value="">${isRs ? "first rotating" : "any rotating"}</option>
+    ${FQ.sdrs.map(s => `<option value="${esc(s.name)}" ${cur === s.name ? "selected" : ""}>${esc(s.name)}${s.role === "dedicated" ? " 📌" : ""}</option>`).join("")}</select>`;
+}
+function renderFreqs() {
+  FQ.assignMap = Object.fromEntries((FQ.assignments || []).map(l => l.split("=")));
+  const groups = [...new Set(FQ.catalog.map(c => c.group))];
+  const toolById = Object.fromEntries(FQ.tools.map(t => [t.id, t]));
+  const groupHtml = (title, toolId, items) => {
+    const t = toolById[toolId];
+    const sw = t && t.option ? `<label class=switch><input type=checkbox data-tool="${toolId}" ${t.enabled ? "checked" : ""}> enabled</label>`
+                             : `<span class="badge">always on</span>`;
+    const note = TOOL_NOTES[toolId] ? `<div class=mute style="margin-bottom:6px">${esc(TOOL_NOTES[toolId])}</div>` : "";
+    return `<div class=fgroup data-tool="${toolId}"><div class=fhead><b>${esc(t ? t.label : title)}</b>${sw}</div>${note}
+      <div class=fitems>${items.map(c => `<div class=fitemwrap><label class=fitem><input type=checkbox data-fid="${c.id}" ${c.selected ? "checked" : ""} ${toolId === "auto_rx" ? "disabled" : ""}>
+        <span>${esc(c.name)} <span class=mute>${esc(c.freq || c.range || "")}</span>${c.note ? `<div class=mute>${esc(c.note)}</div>` : ""}</span></label>${picker(c.id, toolId === "auto_rx")}</div>`).join("")}</div></div>`;
+  };
+  let html = groups.map(g => groupHtml(g, GROUP_TOOL[g], FQ.catalog.filter(c => c.group === g)));
+  $("#fbody").innerHTML = html.join("");
+  $("#fcustom").value = (FQ.custom || []).join("\n");
+  $("#fcustomassign").innerHTML = FQ.sdrs && FQ.sdrs.length > 1 && (FQ.custom_entries || []).length
+    ? `<div class=mute style="margin:6px 0 2px">Dongle for each custom line:</div>` + FQ.custom_entries.map(c => `<div class=fitemwrap><span class=fitem>${esc(c.name)}</span>${picker(c.id)}</div>`).join("") : "";
+  $("#fcustomerr").textContent = (FQ.custom_errors || []).join(" · ");
+  $("#fmulti").innerHTML = FQ.sdrs && FQ.sdrs.length > 1
+    ? `<b>${FQ.sdrs.length} dongles.</b> Use the dropdown beside a frequency to give it to a specific dongle (📌 = dedicated). Frequencies left on "any rotating" are shared out between the rotating dongles.` : "";
+  FQorig = fState(); fUpdate();
+}
+async function loadFreqs() { FQ = await api("api/frequencies"); renderFreqs(); }
+document.addEventListener("input", e => {
+  if (e.target.closest && e.target.closest("#tab-freqs")) { $("#fmsg").textContent = ""; $("#fcustomerr").textContent = ""; fUpdate(); }
+});
+$("#freset").onclick = renderFreqs;
+$("#fsave").onclick = async () => {
+  $("#fsave").disabled = true; $("#fmsg").className = "mute"; $("#fmsg").textContent = "Saving…";
+  const r = await fetch("api/settings", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({changes: fChanges()})});
+  const d = await r.json().catch(() => ({ok:false, errors:{_: r.statusText}}));
+  if (!d.ok) {
+    $("#fmsg").className = "msg-bad";
+    const errs = d.errors || {};
+    $("#fcustomerr").textContent = errs.custom_frequencies || "";
+    $("#fmsg").textContent = errs._ || Object.values(errs).filter((v, i, a) => !errs.custom_frequencies || v !== errs.custom_frequencies).join(" · ") || "Fix the errors above.";
+    $("#fsave").disabled = false; return;
+  }
+  $("#fmsg").className = "msg-ok"; $("#fmsg").textContent = "Saved and applied.";
+  await loadFreqs(); refresh();
+};
+
 document.addEventListener("click", async e => {
   const t = e.target;
+  if (t.dataset.rdel !== undefined) { RCV.splice(+t.dataset.rdel, 1); renderReceivers(); rDirty(); return; }
+  if (t.dataset.ruse !== undefined) {
+    if (!RCV.length) RCV.push({name: "sdr0", device: SET.legacy_device || "0", role: "rotating"});
+    if (!RCV.some(r => r.device === t.dataset.ruse)) RCV.push({name: "sdr" + RCV.length, device: t.dataset.ruse, role: "dedicated"});
+    renderReceivers(); rDirty(); t.remove(); return;
+  }
   if (t.dataset.tab) { tab = t.dataset.tab; document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b===t));
     document.querySelectorAll("main section").forEach(s => s.hidden = s.id !== "tab-" + tab);
     if (tab === "settings" && !Object.keys(SDIRTY).length) loadSettings();
+    if (tab === "freqs" && (!FQ || !Object.keys(fChanges()).length)) loadFreqs();
     refresh(); return; }
   if (t.dataset.k) { sortDir = sortK === t.dataset.k ? -sortDir : -1; sortK = t.dataset.k; renderDevices(); return; }
   if (t.dataset.approve) { await post("api/devices/" + t.dataset.approve, {approved: t.checked ? 1 : 0}); refresh(); return; }
