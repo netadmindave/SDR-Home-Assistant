@@ -65,7 +65,7 @@
   .fgroup.off .fitems { opacity:.45; }
   .fhead { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
   .fhead b { font-size:14.5px; }
-  .fitems { display:grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap:4px 16px; }
+  .fitems { display:grid; grid-template-columns: repeat(auto-fill, minmax(min(330px, 100%), 1fr)); gap:4px 16px; }
   .fitem { display:flex; gap:8px; align-items:flex-start; padding:3px 0; }
   .fitem .mute { font-size:12px; }
   textarea { width:100%; min-height:110px; font:13px ui-monospace,Menlo,monospace; color:var(--fg);
@@ -77,6 +77,50 @@
   .nowline .bar { margin-top:0; }
   .rtable td, .rtable th { padding:4px 6px; }
   .rtable input, .rtable select { width:100%; }
+  /* ---------- layout safety + mobile */
+  html, body { max-width:100%; overflow-x:hidden; }
+  .tscroll { overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; }
+  nav { overflow-x:auto; flex-wrap:nowrap; scrollbar-width:none; -webkit-overflow-scrolling:touch; }
+  nav::-webkit-scrollbar { display:none; }
+  nav button { white-space:nowrap; flex:0 0 auto; }
+  pre { white-space:pre-wrap; word-break:break-word; }
+  .cnt-snr { display:none; }
+  @media (max-width: 700px) {
+    .hide-m { display:none !important; }
+    .cnt-snr { display:inline; }
+    header { padding:10px 12px; gap:8px; }
+    header h1 { font-size:16px; width:100%; }
+    .now { min-width:0; flex-basis:100%; order:5; }
+    .nowline { grid-template-columns: 56px 1fr; }
+    nav { padding:8px 10px 0; }
+    main { padding:0 8px 24px; }
+    .panel { padding:10px; border-radius:0 8px 8px 8px; }
+    .tools > * { flex:1 1 auto; }
+    .tools input[type=text] { width:100%; }
+    /* devices table -> cards */
+    table.devtable thead { display:none; }
+    table.devtable, table.devtable tbody { display:block; }
+    table.devtable tr.dev { display:grid; grid-template-columns: 1fr auto; gap:2px 10px;
+      padding:10px 4px; border-bottom:1px solid var(--line); }
+    table.devtable tr.dev td { display:block; border:none; padding:0; }
+    table.devtable tr.dev td[data-label]::before { content: attr(data-label) ": "; color:var(--mute); font-size:12px; }
+    table.devtable tr.dev td.c-name { grid-column:1; font-size:15px; }
+    table.devtable tr.dev td.c-ha { grid-column:2; grid-row:1; text-align:right; }
+    table.devtable tr.dev td.c-wide { grid-column:1 / -1; }
+    table.devtable tr.dev td.num { text-align:left; }
+    table.devtable tr.detail { display:block; }
+    table.devtable tr.detail td { display:block; padding:8px 0; }
+    .grid { grid-template-columns: 1fr; }
+    .srow { padding:10px 0; }
+    /* receivers table -> cards */
+    .rtable thead { display:none; }
+    .rtable, .rtable tbody { display:block; }
+    .rtable tr { display:grid; grid-template-columns: 1fr 1fr; gap:6px 10px; padding:10px 0;
+      border-bottom:1px solid var(--line); }
+    .rtable td { display:block; border:none; padding:0; }
+    .rtable td[data-label]::before { content: attr(data-label); display:block; color:var(--mute); font-size:12px; }
+    .rtable td[colspan] { grid-column:1 / -1; }
+  }
 </style>
 </head>
 <body>
@@ -111,11 +155,11 @@
       <span style="flex:1"></span>
       <a href="api/export"><button>Export JSON</button></a>
     </div>
-    <table><thead><tr>
+    <div class=tscroll><table class=devtable><thead><tr>
       <th data-k="name">Device</th><th data-k="category">Type</th><th data-k="dev_id">ID</th>
       <th data-k="slot">Heard on</th><th data-k="count" class="num">Count</th>
       <th data-k="snr" class="num">SNR</th><th data-k="last_seen">Last seen</th><th>Latest output</th><th>In HA</th>
-    </tr></thead><tbody id="devbody"></tbody></table>
+    </tr></thead><tbody id="devbody"></tbody></table></div>
   </section>
 
   <section id="tab-signals" class="panel" hidden>
@@ -125,19 +169,19 @@
       <label><input type="checkbox" id="hidecont"> hide continuous carriers</label>
       <label><input type="checkbox" id="onlyundec" checked> only bands with nothing decoded nearby</label>
     </div>
-    <table><thead><tr><th>Frequency (MHz)</th><th>Band</th><th class="num">Hits</th><th class="num">Duty</th>
+    <div class=tscroll><table><thead><tr><th>Frequency (MHz)</th><th>Band</th><th class="num">Hits</th><th class="num">Duty</th>
       <th class="num">Max SNR</th><th class="num">Avg SNR</th><th>Character</th><th>Decoded nearby?</th><th>Last seen</th></tr></thead>
-      <tbody id="sigbody"></tbody></table>
+      <tbody id="sigbody"></tbody></table></div>
   </section>
 
   <section id="tab-coverage" class="panel" hidden>
     <div id="moninfo" class="mute" style="margin-bottom:10px"></div>
     <div class="tools"><span id="cyc" class="mute"></span><span style="flex:1"></span>
       <button id="reset">Reset survey data</button></div>
-    <table><thead><tr><th>Slot</th><th>Decoder</th><th>Frequency</th><th class="num">Runs</th>
+    <div class=tscroll><table><thead><tr><th>Slot</th><th>Decoder</th><th>Frequency</th><th class="num">Runs</th>
       <th class="num">Listened</th><th class="num">Events</th><th class="num">Frames seen</th>
       <th class="num">Frames decoded</th><th class="num">Errors</th><th>Last run</th><th>Last error</th></tr></thead>
-      <tbody id="slotbody"></tbody></table>
+      <tbody id="slotbody"></tbody></table></div>
     <p class="mute">“Frames seen vs decoded” (rtl_433 only): frames the demodulator detected vs frames that produced a decoded event. A large gap means unknown or weak transmitters on that frequency.</p>
   </section>
 
@@ -167,7 +211,7 @@
       <p class="mute">One dongle needs nothing here: it uses <b>Dongle</b> under Radio. For several, add one row per dongle.
         <b>Rotating</b> dongles share the scan between them (survey/monitor modes apply). <b>Dedicated</b> dongles only run the frequencies you assign to them on the Frequencies tab: one frequency = parked there full time.
         Use serial numbers (set with <code>rtl_eeprom -s</code>) so dongles keep their roles after a reboot.</p>
-      <table class=rtable><thead><tr><th>Name</th><th>Device (index or serial)</th><th>Role</th><th>Gain</th><th>PPM</th><th></th></tr></thead><tbody id="rbody"></tbody></table>
+      <div class=tscroll><table class=rtable><thead><tr><th>Name</th><th>Device (index or serial)</th><th>Role</th><th>Gain</th><th>PPM</th><th></th></tr></thead><tbody id="rbody"></tbody></table></div>
       <div class="tools" style="margin-top:8px"><button id="radd">Add receiver</button><button id="rdetect">Detect dongles</button><span id="rdet" class="mute"></span></div>
       <div id="err-sdrs" class="msg-bad"></div>
     </div>
@@ -213,14 +257,14 @@ function renderDevices() {
   $("#devbody").innerHTML = rows.map(d => {
     const name = d.name || d.model;
     let h = `<tr class="dev ${d.approved?"approved":""} ${d.ignored?"ignored":""}" data-uid="${d.uid}">
-      <td><b>${esc(name)}</b>${d.name ? `<div class=mute>${esc(d.model)}</div>` : ""}</td>
-      <td><span class=cat>${esc(d.category)}</span></td>
-      <td>${esc(d.dev_id)}${d.channel ? ` <span class=mute>ch ${esc(d.channel)}</span>` : ""}</td>
-      <td>${esc(d.slot)}<div class=mute>${d.freq_mhz ? (+d.freq_mhz).toFixed(3) + " MHz" : ""}</div></td>
-      <td class=num>${d.count}</td><td class=num>${d.snr != null ? (+d.snr).toFixed(1) : "—"}</td>
-      <td>${ago(d.last_seen)}<div class=mute>first ${ago(d.first_seen)}</div></td>
-      <td class=mute>${summary(d.last_state)}</td>
-      <td>${["auto_rx","adsb","ais","noaa"].includes(d.source) ? `<span class=mute title="Published via a shared receiver device in HA">receiver</span>`
+      <td class=c-name><b>${esc(name)}</b>${d.name ? `<div class=mute>${esc(d.model)}</div>` : ""}</td>
+      <td class=c-wide><span class=cat>${esc(d.category)}</span></td>
+      <td class=c-wide data-label="ID">${esc(d.dev_id)}${d.channel ? ` <span class=mute>ch ${esc(d.channel)}</span>` : ""}</td>
+      <td class=c-wide data-label="Heard on">${esc(d.slot)} <span class=mute>${d.freq_mhz ? (+d.freq_mhz).toFixed(3) + " MHz" : ""}</span></td>
+      <td class="num c-wide" data-label="Count">${d.count}<span class=cnt-snr> · SNR ${d.snr != null ? (+d.snr).toFixed(1) : "—"}</span></td><td class="num hide-m">${d.snr != null ? (+d.snr).toFixed(1) : "—"}</td>
+      <td class=c-wide data-label="Last seen">${ago(d.last_seen)} <span class=mute>(first ${ago(d.first_seen)})</span></td>
+      <td class="mute c-wide">${summary(d.last_state)}</td>
+      <td class=c-ha>${["auto_rx","adsb","ais","noaa"].includes(d.source) ? `<span class=mute title="Published via a shared receiver device in HA">receiver</span>`
           : `<input type=checkbox data-approve="${d.uid}" ${d.approved?"checked":""} title="Publish to Home Assistant">`}</td></tr>`;
     if (open.has(d.uid)) h += `<tr class=detail><td colspan=9><div class=grid>
         <div><div class=tools>
@@ -338,11 +382,11 @@ function renderSettings() {
 let RCV = [];
 function renderReceivers() {
   $("#rbody").innerHTML = RCV.length ? RCV.map((r, i) => `<tr>
-    <td><input type=text data-ri="${i}" data-rk="name" value="${esc(r.name || "")}" placeholder="e.g. door"></td>
-    <td><input type=text data-ri="${i}" data-rk="device" value="${esc(r.device || "")}" placeholder="0 or serial"></td>
-    <td><select data-ri="${i}" data-rk="role">${["rotating","dedicated"].map(x => `<option ${x === (r.role || "rotating") ? "selected" : ""}>${x}</option>`).join("")}</select></td>
-    <td><input type=text data-ri="${i}" data-rk="gain" value="${esc(r.gain || "")}" placeholder="auto"></td>
-    <td><input data-ri="${i}" data-rk="ppm" type=number value="${esc(r.ppm ?? "")}" placeholder="0"></td>
+    <td data-label="Name"><input type=text data-ri="${i}" data-rk="name" value="${esc(r.name || "")}" placeholder="e.g. door"></td>
+    <td data-label="Device"><input type=text data-ri="${i}" data-rk="device" value="${esc(r.device || "")}" placeholder="0 or serial"></td>
+    <td data-label="Role"><select data-ri="${i}" data-rk="role">${["rotating","dedicated"].map(x => `<option ${x === (r.role || "rotating") ? "selected" : ""}>${x}</option>`).join("")}</select></td>
+    <td data-label="Gain"><input type=text data-ri="${i}" data-rk="gain" value="${esc(r.gain || "")}" placeholder="auto"></td>
+    <td data-label="PPM"><input data-ri="${i}" data-rk="ppm" type=number value="${esc(r.ppm ?? "")}" placeholder="0"></td>
     <td><button data-rdel="${i}">Remove</button></td></tr>`).join("")
     : `<tr><td colspan=6 class=mute>Single dongle: device ${esc(SET.legacy_device)} (the Dongle setting under Radio).</td></tr>`;
 }

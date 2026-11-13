@@ -16,6 +16,12 @@
   by listening time; *dedicated* dongles run only the frequencies assigned to them (one = parked
   full time). Each frequency on the Frequencies tab has a dongle picker. Radiosondes can get their
   own dongle. With no receivers listed, the single `device` option works as before.
+- Fix radiosondes: "No working SDRs!" from auto_rx. The image was missing `usbutils` (auto_rx
+  checks for the dongle with `lsusb`); dongle indexes other than 0 are now translated to serial
+  numbers for auto_rx. After 3 failures in a row, radiosondes are skipped until the next window
+  instead of retrying every few seconds.
+- Mobile layout: scrollable tab strip, device and receiver tables become cards on narrow screens,
+  no more sideways page scrolling.
 
 ## 0.5.1
 - Fix Settings "Could not save: Extra data: line 1 column 4": the add-on called the Supervisor's

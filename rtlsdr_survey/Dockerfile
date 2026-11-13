@@ -56,6 +56,7 @@ ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libusb-1.0-0 libfftw3-single3 sox python3 python3-aiohttp python3-paho-mqtt python3-yaml ca-certificates \
         multimon-ng direwolf libncurses6 zlib1g libzstd1 \
+        usbutils libsamplerate0 libatomic1 libbsd0 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=cbuild /usr/local/lib/ /usr/local/lib/
 COPY --from=cbuild /usr/local/bin/rtl_433 /usr/local/bin/rtl_power /usr/local/bin/rtl_fm \

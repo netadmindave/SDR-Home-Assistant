@@ -54,6 +54,8 @@ class Scanner:
         self._pos = {"survey": 0, "monitor": 0}
         self._next_day_survey = self._schedule_day_survey(time.time())
         self._pending = None
+        self._rs_failures = 0
+        self._rs_suppressed_until = 0.0
 
     # shared state lives on the manager
     mode = property(lambda self: self.mgr.mode)
@@ -85,6 +87,8 @@ class Scanner:
         if self.rs_force_until > time.time():
             return self.rs_force_until
         end = rs.window_end(self.rs_windows)
+        if end and time.time() < self._rs_suppressed_until:
+            return None   # auto_rx kept failing this window; carry on scanning instead
         return end.timestamp() if end else None
 
     def radiosonde_slot(self, until):
@@ -390,6 +394,15 @@ class Scanner:
         dwell = time.time() - self.started
         self.db.slot_run(slot, dwell, events=self.cur_events, frames=stats["frames"],
                          frames_decoded=stats["frames_decoded"], error=err)
+        if slot["decoder"] == "auto_rx":
+            self._rs_failures = self._rs_failures + 1 if err else 0
+            if self._rs_failures >= 3:
+                end = rs.window_end(self.rs_windows)
+                self._rs_suppressed_until = (end.timestamp() if end else time.time() + 3600)
+                self.rs_force_until = 0.0
+                self._rs_failures = 0
+                self.note("radiosonde_auto_rx failed 3 times in a row; skipping radiosondes until "
+                          "the next window. Last error: " + str(err)[:300], logging.ERROR)
         if err:
             self.note(f"{slot['name']}: {err}", logging.ERROR)
             await asyncio.sleep(10)  # avoid hammering a missing/busy dongle
@@ -521,9 +534,29 @@ class Scanner:
                     rtl433_state(ev), ev)
 
     # ------------------------------------------------------------- radiosonde_auto_rx
+    async def _autorx_device(self):
+        """auto_rx accepts '0' (= any RTL-SDR) or a serial number; map other indexes to serials."""
+        dev = str(self.o["device"]).strip()
+        if not dev.isdigit() or dev == "0":
+            return dev
+        try:
+            p = await asyncio.create_subprocess_exec(
+                _bin("rtl_test"), "-d", "9999", stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT)
+            out, _ = await asyncio.wait_for(p.communicate(), 10)
+            m = re.search(rf"^\s*{int(dev)}:\s+.*?SN:\s*(\S+)", out.decode(errors="replace"), re.M)
+            if m:
+                return m.group(1)
+        except (OSError, asyncio.TimeoutError):
+            pass
+        self.note(f"Could not find the serial number of dongle #{dev} for auto_rx; set this "
+                  "receiver's device to its serial number", logging.WARNING)
+        return dev
+
     async def _run_autorx(self, slot):
         base = data_dir() / "auto_rx"
-        cfg = rs.write_station_cfg(self.o, base / "station.cfg")
+        cfg = rs.write_station_cfg(collections.ChainMap({"device": await self._autorx_device()}, self.o),
+                                   base / "station.cfg")
         (base / "log").mkdir(parents=True, exist_ok=True)
         try:
             listener = await rs.open_listener(lambda pkt: self.handle_sonde(slot, pkt))
