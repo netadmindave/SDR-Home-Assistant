@@ -1,5 +1,5 @@
 name: RTL-SDR Survey
-version: "0.6.0"
+version: "0.6.1"
 slug: rtlsdr_survey
 description: >-
   One RTL-SDR, time-sliced between rtl_433 decoding, rtl_power sweeps and
